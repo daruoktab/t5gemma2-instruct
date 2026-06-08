@@ -1,0 +1,184 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans)}
+.dash{padding:16px 0;display:flex;flex-direction:column;gap:12px}
+.row{display:flex;gap:12px}
+.card{background:var(--color-background-secondary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:14px 16px;flex:1}
+.card h3{font-size:13px;font-weight:500;color:var(--color-text-secondary);margin-bottom:10px;text-transform:none}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stat{background:var(--color-background-primary);border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;text-align:center}
+.stat .val{font-size:22px;font-weight:500;color:var(--color-text-primary);line-height:1.2}
+.stat .lbl{font-size:11px;color:var(--color-text-secondary);margin-top:3px}
+.stat .sub{font-size:11px;color:var(--color-text-tertiary)}
+.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.bar-row .lbl{font-size:12px;color:var(--color-text-secondary);width:80px;flex-shrink:0;text-align:right}
+.bar-row .lbl2{font-size:12px;color:var(--color-text-secondary);width:72px;flex-shrink:0;text-align:right}
+.bar-wrap{flex:1;background:var(--color-background-primary);border-radius:4px;height:16px;overflow:hidden}
+.bar{height:100%;border-radius:4px;transition:width .4s}
+.bar-val{font-size:11px;color:var(--color-text-tertiary);width:52px;flex-shrink:0}
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-size:11px;font-weight:500;color:var(--color-text-tertiary);text-align:left;padding:4px 6px;border-bottom:1px solid var(--color-border-tertiary)}
+.tbl td{font-size:12px;color:var(--color-text-secondary);padding:4px 6px;border-bottom:1px solid var(--color-border-tertiary)}
+.tbl td:first-child{color:var(--color-text-primary);font-weight:500}
+.tbl tr:last-child td{border-bottom:none}
+.trend{display:flex;align-items:flex-end;gap:3px;height:48px;margin-top:4px}
+.trend-bar{flex:1;background:var(--color-background-primary);border-radius:3px 3px 0 0;position:relative}
+.trend-bar .tip{font-size:10px;color:var(--color-text-tertiary);position:absolute;top:-16px;left:50%;transform:translateX(-50%);white-space:nowrap}
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
+.pill.green{background:#E1F5EE;color:#085041}
+.pill.red{background:#FCEBEB;color:#791F1F}
+.pill.amber{background:#FAEEDA;color:#633806}
+.pill.blue{background:#E6F1FB;color:#0C447C}
+@media(prefers-color-scheme:dark){
+  .pill.green{background:#085041;color:#9FE1CB}
+  .pill.red{background:#791F1F;color:#F7C1C1}
+  .pill.amber{background:#633806;color:#FAC775}
+  .pill.blue{background:#0C447C;color:#B5D4F4}
+}
+.divider{height:1px;background:var(--color-border-tertiary);margin:2px 0 8px}
+.accent{color:var(--color-text-primary);font-weight:500}
+</style>
+
+<div class="dash">
+
+  <!-- Row 1: headline stats -->
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="val">2,500</div>
+      <div class="lbl">percakapan</div>
+      <div class="sub">59,422 total pesan</div>
+    </div>
+    <div class="stat">
+      <div class="val">11.4</div>
+      <div class="lbl">rata-rata user turns</div>
+      <div class="sub">min 5 · max 16</div>
+    </div>
+    <div class="stat">
+      <div class="val">2,102</div>
+      <div class="lbl">rata-rata token</div>
+      <div class="sub">min 810 · max 7,814</div>
+    </div>
+    <div class="stat">
+      <div class="val">2.2</div>
+      <div class="lbl">rata-rata task/conv</div>
+      <div class="sub">max 10 · 30% tanpa task</div>
+    </div>
+  </div>
+
+  <!-- Row 2: per-turn stats + token dist -->
+  <div class="row">
+    <div class="card" style="flex:1.1">
+      <h3>Panjang pesan per turn (karakter)</h3>
+      <table class="tbl">
+        <tr><th></th><th>Mean</th><th>Median</th><th>Min</th><th>Max</th><th>StDev</th></tr>
+        <tr><td>User chars/turn</td><td>114</td><td>112</td><td>59</td><td>271</td><td>23</td></tr>
+        <tr><td>User words/turn</td><td>17.6</td><td>17.3</td><td>9.2</td><td>42.5</td><td>3.7</td></tr>
+        <tr><td>Asst chars/turn</td><td>228</td><td>213</td><td>104</td><td>1,826</td><td>110</td></tr>
+        <tr><td>Asst words/turn</td><td>34.3</td><td>32.0</td><td>16</td><td>260</td><td>16</td></tr>
+        <tr><td>User max/conv</td><td>301</td><td>301</td><td>99</td><td>862</td><td>96</td></tr>
+        <tr><td>Asst max/conv</td><td>360</td><td>330</td><td>139</td><td>2,376</td><td>166</td></tr>
+      </table>
+    </div>
+    <div class="card" style="flex:0.9">
+      <h3>Distribusi token per percakapan</h3>
+      <div class="bar-row"><span class="lbl2">&lt;1k tok</span><div class="bar-wrap"><div class="bar" style="width:3%;background:#378ADD"></div></div><span class="bar-val">72 (3%)</span></div>
+      <div class="bar-row"><span class="lbl2">1k–2k</span><div class="bar-wrap"><div class="bar" style="width:49%;background:#378ADD"></div></div><span class="bar-val">1,197 (49%)</span></div>
+      <div class="bar-row"><span class="lbl2">2k–3k</span><div class="bar-wrap"><div class="bar" style="width:29%;background:#378ADD"></div></div><span class="bar-val">711 (29%)</span></div>
+      <div class="bar-row"><span class="lbl2">3k–4k</span><div class="bar-wrap"><div class="bar" style="width:15%;background:#185FA5"></div></div><span class="bar-val">363 (15%)</span></div>
+      <div class="bar-row"><span class="lbl2">4k–5k</span><div class="bar-wrap"><div class="bar" style="width:3%;background:#0C447C"></div></div><span class="bar-val">71 (3%)</span></div>
+      <div class="bar-row"><span class="lbl2">&gt;5k</span><div class="bar-wrap"><div class="bar" style="width:1%;background:#042C53"></div></div><span class="bar-val">26 (1%)</span></div>
+      <div class="divider"></div>
+      <div style="font-size:11px;color:var(--color-text-tertiary)">78% percakapan di bawah 3k token — <span style="color:var(--color-text-secondary)">cocok untuk context window T5Gemma2</span></div>
+    </div>
+  </div>
+
+  <!-- Row 3: word count trend by position + task timing -->
+  <div class="row">
+    <div class="card">
+      <h3>Tren panjang pesan by turn position (kata)</h3>
+      <div style="display:flex;gap:0;align-items:flex-end;height:70px;margin-bottom:6px">
+        <!-- user trend: 22.4 20.5 25.2 19.5 17.4 16.1 15.9 15.2 14.5 13.8 11.1 (max=25.2) -->
+        <!-- asst trend: 38.8 38.2 33.5 32.0 33.6 34.7 35.9 35.1 33.6 33.4 23.6 (max=38.8) -->
+        <!-- normalize to 70px height -->
+        <div style="display:flex;flex-direction:column;justify-content:space-between;height:70px;padding-right:6px">
+          <span style="font-size:10px;color:var(--color-text-tertiary)">40</span>
+          <span style="font-size:10px;color:var(--color-text-tertiary)">20</span>
+          <span style="font-size:10px;color:var(--color-text-tertiary)">0</span>
+        </div>
+        <svg width="100%" height="70" style="flex:1">
+          <!-- asst line: values scaled to 70px, max=40 → scale=70/40=1.75 -->
+          <!-- pos: 0-10 mapped to x=0..100% -->
+          <polyline fill="none" stroke="#378ADD" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            points="0,2 10,2.5 20,11.4 30,14 40,11.2 50,9.8 60,6 70,8.6 80,11.4 90,11.9 100,28.4"
+            vector-effect="non-scaling-stroke"/>
+          <!-- user line -->
+          <polyline fill="none" stroke="#1D9E75" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            points="0,16.6 10,22.3 20,5.6 30,26.3 40,35.5 50,40.3 60,41.3 70,43.4 80,46.1 90,48.5 100,57.7"
+            vector-effect="non-scaling-stroke"/>
+          <!-- x-axis labels -->
+          <text x="0" y="82" font-size="9" fill="var(--color-text-tertiary)" text-anchor="middle">awal</text>
+          <text x="50%" y="82" font-size="9" fill="var(--color-text-tertiary)" text-anchor="middle">tengah</text>
+          <text x="100%" y="82" font-size="9" fill="var(--color-text-tertiary)" text-anchor="end">akhir</text>
+        </svg>
+      </div>
+      <div style="display:flex;gap:16px;margin-top:18px">
+        <span style="font-size:11px;color:var(--color-text-secondary)"><span style="color:#1D9E75">■</span> User — makin singkat ke akhir</span>
+        <span style="font-size:11px;color:var(--color-text-secondary)"><span style="color:#378ADD">■</span> Asst — stabil, turun di akhir</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Posisi task dalam percakapan</h3>
+      <div class="bar-row"><span class="lbl">Early (0-25%)</span><div class="bar-wrap"><div class="bar" style="width:21%;background:#1D9E75"></div></div><span class="bar-val">1,189 (21%)</span></div>
+      <div class="bar-row"><span class="lbl">Mid-early</span><div class="bar-wrap"><div class="bar" style="width:36%;background:#378ADD"></div></div><span class="bar-val">2,014 (36%)</span></div>
+      <div class="bar-row"><span class="lbl">Mid-late</span><div class="bar-wrap"><div class="bar" style="width:26%;background:#378ADD"></div></div><span class="bar-val">1,450 (26%)</span></div>
+      <div class="bar-row"><span class="lbl">Late (75-100%)</span><div class="bar-wrap"><div class="bar" style="width:17%;background:#185FA5"></div></div><span class="bar-val">929 (17%)</span></div>
+      <div class="divider"></div>
+      <div style="font-size:11px;color:var(--color-text-tertiary)">57% task muncul di separuh awal percakapan — <span style="color:var(--color-text-secondary)">model butuh belajar task kapan saja</span></div>
+    </div>
+  </div>
+
+  <!-- Row 4: task per conversation dist + top records -->
+  <div class="row">
+    <div class="card">
+      <h3>Distribusi jumlah task per percakapan</h3>
+      <div class="bar-row"><span class="lbl2">0 task</span><div class="bar-wrap"><div class="bar" style="width:75.9%;background:#E24B4A"></div></div><span class="bar-val">759 (30%)</span></div>
+      <div class="bar-row"><span class="lbl2">1 task</span><div class="bar-wrap"><div class="bar" style="width:11.9%;background:#EF9F27"></div></div><span class="bar-val">119 (5%)</span></div>
+      <div class="bar-row"><span class="lbl2">2 task</span><div class="bar-wrap"><div class="bar" style="width:38.1%;background:#1D9E75"></div></div><span class="bar-val">381 (15%)</span></div>
+      <div class="bar-row"><span class="lbl2">3 task</span><div class="bar-wrap"><div class="bar" style="width:60.4%;background:#1D9E75"></div></div><span class="bar-val">604 (24%)</span></div>
+      <div class="bar-row"><span class="lbl2">4 task</span><div class="bar-wrap"><div class="bar" style="width:39.2%;background:#378ADD"></div></div><span class="bar-val">392 (16%)</span></div>
+      <div class="bar-row"><span class="lbl2">5+ task</span><div class="bar-wrap"><div class="bar" style="width:24.4%;background:#185FA5"></div></div><span class="bar-val">245 (10%)</span></div>
+    </div>
+    <div class="card">
+      <h3>Percakapan notable</h3>
+      <table class="tbl">
+        <tr><th>Label</th><th>ID</th><th>Topik</th><th></th></tr>
+        <tr><td>Token terbanyak</td><td>1812</td><td>Alat BBQ portable</td><td><span class="pill blue">7,814 tok</span></td></tr>
+        <tr><td>Token tersedikit</td><td>589</td><td>Alat pemadam api</td><td><span class="pill green">810 tok</span></td></tr>
+        <tr><td>Task terbanyak</td><td>1002</td><td>Resep & Sejarah Rendang</td><td><span class="pill amber">10 task</span></td></tr>
+        <tr><td>Turns terbanyak</td><td>—</td><td>max 16 user turns</td><td><span class="pill blue">16</span></td></tr>
+        <tr><td>Turns tersedikit</td><td>—</td><td>min 5 user turns</td><td><span class="pill amber">5</span></td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Row 5: key findings -->
+  <div class="card">
+    <h3>Temuan kunci untuk fine-tuning</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.6">
+        <span class="accent">User makin singkat seiring percakapan</span> — dari rata-rata 22 kata di turn pertama jadi 11 kata di turn terakhir. Wajar, karena makin lama user makin pakai shorthand ("oke", "makasih", dll).
+      </div>
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.6">
+        <span class="accent">Asst konsisten ~34 kata</span> per turn di sepanjang percakapan, kecuali turn terakhir yang lebih singkat (salam penutup). Bagus untuk konsistensi training.
+      </div>
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.6">
+        <span class="accent">78% percakapan di bawah 3k token</span> — aman untuk dijadikan single training sequence di T5Gemma2 tanpa perlu truncation yang agresif.
+      </div>
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.6">
+        <span class="accent">30.4% percakapan tanpa task sama sekali</span> — ini porsi "pure chat". Perlu dicek: apakah cukup untuk model belajar tidak memaksakan task ke percakapan biasa.
+      </div>
+    </div>
+  </div>
+
+</div>

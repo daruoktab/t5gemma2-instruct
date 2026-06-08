@@ -1,0 +1,38 @@
+@startuml
+' § di Markdown = "Bagian/section"; di diagram pakai kata biasa biar jelas.
+skinparam shadowing false
+skinparam conditionStyle diamond
+
+title T5-Gemma-2 Instruct — alur eksekusi (ringkas)\n(sumber: T5_GEMMA2_INSTRUCT_TRAINING_PLAN.md — Bagian 8)
+
+start
+
+partition "Data (nested → SFT)" {
+  :Merge nested base+extra\n→ merged.jsonl;
+  :Rebuild chat_train / chat_val\n(rebuild_chat_sft_from_nested);
+  :Trim IndoQA → indoqa_train.jsonl\n(full → indoqa_train_full);
+  :Cek baris, max_length;\ntambah EXTRA_SFT_JSONL bila perlu;
+  :Quality checks\n(check_dataset_quality, dll.);
+}
+
+note right
+  **Smoke (opsional, sekali):** SFT **270M**
+  sebelum run besar — cek template/pipeline.
+end note
+
+repeat
+  partition "Satu putaran train (Bagian 4 — hiperparam)" {
+    :SFT **4B LoRA**\n(full_train_4b.py);
+    :Eval + pilih checkpoint\n(bukan otomatis epoch terakhir);
+  }
+backward :Belum memadai → putar lagi:\n**data & kurasi** (Bagian 3),\n**train/eval** (Bagian 4),\n**distil/preference** (Bagian 6–7);
+repeat while (Eval sudah memadai?) is (tidak) not (ya)
+
+partition "Opsional setelah SFT OK (Bagian 6–7: DPO / distil)" {
+  :Generate preference pairs\n(generate_dataset_preferences_deepseek);
+  :DPO ringan\n(train_dpo_4b.py);
+}
+
+stop
+
+@enduml
