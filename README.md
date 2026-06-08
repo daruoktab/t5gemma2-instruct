@@ -11,10 +11,7 @@ Berikut adalah visualisasi arsitektur, spesifikasi dataset, dan alur pelatihan p
 ### 1. Project Infographic
 ![Project Infographic](docs/project-infographic.png)
 
-### 2. T5-Gemma-2 Training Flow
-![T5-Gemma-2 Training Flow](docs/t5_gemma2_training_flow.png)
-
-### 3. Dataset Specification
+### 2. Dataset Specification
 ![Dataset Specification](docs/dataset_2500_spec.png)
 
 ---
