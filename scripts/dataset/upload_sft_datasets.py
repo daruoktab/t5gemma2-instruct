@@ -15,10 +15,15 @@ def load_jsonl_samples(file_path):
             try:
                 row = json.loads(line)
                 if 'input' in row and 'target' in row:
-                    formatted_data.append({
+                    item = {
                         "input": row['input'],
                         "target": row['target']
-                    })
+                    }
+                    if 'chat_idx' in row:
+                        item['chat_idx'] = row['chat_idx']
+                    if 'turn_idx' in row:
+                        item['turn_idx'] = row['turn_idx']
+                    formatted_data.append(item)
             except Exception as e:
                 print(f"Error parsing line in {file_path}: {e}")
     return formatted_data

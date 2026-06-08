@@ -383,8 +383,8 @@ def main() -> None:
     setattr(model.config, "use_cache", False)
     model.print_trainable_parameters()
 
-    # Re-apply logit mask setelah dibungkus PEFT
-    apply_logit_mask(model, ALL_SUPPRESS_IDS)
+    # Re-apply logit mask setelah dibungkus PEFT (dihapus untuk mencegah double mask)
+    # apply_logit_mask(model, ALL_SUPPRESS_IDS)
 
     # Callbacks
     plot_callback = TrainingPlotCallback(output_dir=OUTPUT_DIR)
@@ -403,7 +403,7 @@ def main() -> None:
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
-        learning_rate=5e-5,
+        learning_rate=2e-4,
         num_train_epochs=10,  # 100 epochs sesuai request
         warmup_steps=50,
         weight_decay=0.01,
@@ -434,8 +434,8 @@ def main() -> None:
             plot_callback,
             sample_callback,
             EarlyStoppingCallback(
-                early_stopping_patience=10
-            ),  # Stop jika eval_loss memburuk terus selama 10 eval (250 steps)
+                early_stopping_patience=3
+            ),  # Stop jika eval_loss memburuk terus selama 3 eval (75 steps)
         ],
     )
 

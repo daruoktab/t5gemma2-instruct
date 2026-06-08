@@ -38,9 +38,10 @@ def flatten_objects(
 ) -> int:
     n = 0
     for obj in objects:
+        chat_idx = obj.get("id")
         convs = obj["conversations"]
-        for inp, tgt in conversations_to_sft_rows(convs, fallback):
-            fout.write(json.dumps({"input": inp, "target": tgt}, ensure_ascii=False) + "\n")
+        for row in conversations_to_sft_rows(convs, fallback, chat_idx):
+            fout.write(json.dumps(row, ensure_ascii=False) + "\n")
             n += 1
     return n
 
@@ -50,8 +51,8 @@ def main() -> None:
     p.add_argument(
         "--nested",
         type=Path,
-        default=ROOT / "data" / "t5-gemma-2-chat-instruct-merged.jsonl",
-        help="JSONL nested merged",
+        default=ROOT / "data" / "t5-gemma-2-chat-instruct-dataset.jsonl",
+        help="JSONL nested dataset",
     )
     p.add_argument("--train-out", type=Path, default=ROOT / "data" / "chat_train.jsonl")
     p.add_argument("--val-out", type=Path, default=ROOT / "data" / "chat_val.jsonl")

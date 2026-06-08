@@ -19,6 +19,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure current directory and root are in sys.path for local/absolute imports
 _P = Path(__file__).resolve()
@@ -73,9 +74,10 @@ def parse_system_and_turns(
 def conversations_to_sft_rows(
     messages: list[dict],
     fallback_system: str,
-) -> list[tuple[str, str]]:
+    chat_idx: int | None = None,
+) -> list[dict]:
     system, turns = parse_system_and_turns(messages, fallback_system)
-    rows: list[tuple[str, str]] = []
+    rows: list[dict] = []
     for k in range(len(turns)):
         parts: list[str] = [f"system: {system}"]
         for i in range(k):
@@ -83,7 +85,15 @@ def conversations_to_sft_rows(
             parts.append(f"assistant: {turns[i][1]}")
         parts.append(f"user: {turns[k][0]}")
         inp = "\n".join(parts).strip()
-        rows.append((inp, turns[k][1]))
+        
+        row_data: dict[str, Any] = {
+            "input": inp,
+            "target": turns[k][1],
+        }
+        if chat_idx is not None:
+            row_data["chat_idx"] = chat_idx
+        row_data["turn_idx"] = k
+        rows.append(row_data)
     return rows
 
 
@@ -118,8 +128,9 @@ def main() -> None:
                 print("[SKIP] baris tanpa conversations[]", file=sys.stderr)
                 continue
             n_in += 1
-            for inp, tgt in conversations_to_sft_rows(convs, fallback):
-                fout.write(json.dumps({"input": inp, "target": tgt}, ensure_ascii=False) + "\n")
+            chat_idx = obj.get("id")
+            for row in conversations_to_sft_rows(convs, fallback, chat_idx):
+                fout.write(json.dumps(row, ensure_ascii=False) + "\n")
                 n_out += 1
 
     print(f"[OK] {n_in} baris conversations → {n_out} baris SFT → {args.output}")
