@@ -1,0 +1,161 @@
+# 🇮🇩 T5-Gemma-2 Instruct & Chat Pipeline (Bahasa Indonesia)
+
+Pipeline instruksi dan percakapan (instruction-tuning & chat) berbasis arsitektur **Encoder-Decoder (Seq2Seq)** menggunakan **T5-Gemma-2 (4B & 270M)** dengan strategi transplantasi bobot (*weight transplantation* / "Cangkok") dari **Gemma 3 IT**.
+
+---
+
+## 🖼️ Project Infographic & Training Flow
+
+Berikut adalah visualisasi arsitektur, spesifikasi dataset, dan alur pelatihan proyek ini:
+
+### 1. Project Infographic
+![Project Infographic](docs/project-infographic.png)
+
+### 2. T5-Gemma-2 Training Flow
+![T5-Gemma-2 Training Flow](docs/t5_gemma2_training_flow.png)
+
+### 3. Dataset Specification
+![Dataset Specification](docs/dataset_2500_spec.png)
+
+---
+
+## 🚀 Deskripsi Proyek (Project Overview)
+
+Proyek ini dirancang untuk melatih dan menguji model **T5-Gemma-2** agar optimal dalam memahami dan merespons instruksi serta percakapan dalam **Bahasa Indonesia** (prioritas utama) dan **Bahasa Inggris** (sekunder/bilingual). 
+
+### Mengapa Memilih Arsitektur Encoder-Decoder (Seq2Seq)?
+Meskipun arsitektur *decoder-only* mendominasi lanskap LLM saat ini, arsitektur *encoder-decoder* seperti T5-Gemma-2 menawarkan keunggulan unik:
+1. **Asymmetric Processing**: Sangat efisien untuk tugas dengan input panjang (konteks/dokumen) yang menghasilkan output pendek (respons/ringkasan).
+2. **Explicit Cross-Attention**: Encoder memproses seluruh input secara bidirectional sebelum decoder bekerja, mencegah masalah *attention degeneration* (lupa detail awal).
+3. **Task Flexibility**: Sangat unggul dalam tugas terstruktur seperti peringkasan (*summarization*), penerjemahan (*translation*), ekstraksi data, dan *grounded QA* di tengah percakapan.
+
+---
+
+## 🏗️ Detail Arsitektur: Gemma 3 vs T5Gemma2
+
+T5-Gemma-2 dibangun melalui adaptasi model Gemma 3 menggunakan metode UL2.
+
+| Aspek | Gemma 3 (4B) | T5Gemma2 (4B-4B) |
+| :--- | :--- | :--- |
+| **Arsitektur** | Multimodal Decoder-only | **Multimodal Encoder-Decoder** |
+| **Model Type** | `gemma3` | `t5gemma2` |
+| **Total Parameter** | **~4.28B** (3.88B text + 0.4B vision) | **~7.51B** (3.88B enc + 3.88B dec + 0.4B vis) |
+| **Attention** | Standard Self-Attention | **Merged Attention** (Self + Cross) |
+| **Tied Embeddings** | ✅ Yes (Embed ↔ Head) | ✅ Yes (Enc ↔ Dec ↔ Head) |
+| **Vocab Size** | 262,208 (extra 64 padding) | 262,144 (exact) |
+
+### Mekanisme Merged Attention
+T5-Gemma-2 tidak memiliki modul `cross_attention` terpisah di decoder. Sebagai gantinya, ia menggunakan **Merged Attention**:
+- **Query (Q)**: Dibentuk dari decoder hidden states.
+- **Key (K) & Value (V)**: Dibentuk dengan menggabungkan (*concatenate*) decoder input dan encoder output secara sekuensial.
+- **Masking**: Kombinasi bidirectional (untuk token encoder) dan causal (untuk token decoder).
+
+---
+
+## 💉 Strategi "Cangkok" Bobot (Weight Transplantation)
+
+Untuk menyuntikkan kemampuan instruksi tanpa pelatihan penuh (*full training*) yang mahal, proyek ini mengimplementasikan metode transplantasi bobot dari **Gemma 3 IT** ke **T5-Gemma-2**:
+
+1. **Vision Transplant (Identik)**:
+   - Vision Tower (SigLIP) dan Multi-modal Projector dicangkok langsung dari Gemma 3 4B IT karena dimensi output yang cocok (1152 ➔ 2560).
+2. **Decoder Transplant (Task Vector Transfer)**:
+   - Menghitung perbedaan kemampuan instruksi: $\Delta = \text{Gemma3\_IT} - \text{Gemma3\_PT}$.
+   - Menyuntikkan delta tersebut ke decoder T5-Gemma-2 dengan skala tertentu ($0.3 - 0.5$). Ini mempertahankan adaptasi UL2 (cross-attention) asli sekaligus mentransfer gaya instruksi.
+
+---
+
+## 📊 Dataset Spesifikasi
+
+Dataset yang digunakan berfokus pada kualitas tinggi dan format multi-turn dalam Bahasa Indonesia:
+1. **`chat_multiturn`**: 2.500 percakapan multi-turn hasil kurasi manual dan distilasi API (sebelum unroll menjadi puluhan ribu baris SFT).
+2. **`indoqa_documents`**: ~4.400 contoh pemahaman bacaan dan Q&A berbasis dokumen Indonesia.
+
+Format data menggunakan skema OpenAI/ChatML standar:
+```json
+{
+  "messages": [
+    {"role": "system", "content": "Sistem prompt Bahasa Indonesia..."},
+    {"role": "user", "content": "Pertanyaan user..."},
+    {"role": "assistant", "content": "Jawaban model..."}
+  ]
+}
+```
+
+---
+
+## ⚙️ Pipeline Pelatihan & Validasi
+
+### 1. Persiapan Data (Data Preprocessing)
+Gabungkan dataset mentah dan lakukan pemisahan data training serta validasi:
+```powershell
+# 1. Merge nested conversation base + extra
+python scripts/dataset/merge_nested_conversations_jsonl.py
+
+# 2. Rebuild chat_train.jsonl dan chat_val.jsonl
+python scripts/dataset/rebuild_chat_sft_from_nested.py
+
+# 3. Trim IndoQA dataset ke 2.500 baris untuk kurasi optimal
+python scripts/dataset/trim_indoqa_train.py
+```
+
+### 2. Menjalankan Supervised Fine-Tuning (SFT)
+Kami menyediakan skrip untuk model versi ringan (270M) untuk iterasi cepat, serta versi penuh (4B):
+```powershell
+# Jalankan SFT 270M (Smoke test / Lightweight training)
+python scripts/training/train_clean_270m.py
+
+# Jalankan SFT 4B LoRA (A100 GPU)
+python scripts/training/train_clean_4b.py
+```
+
+### 3. Alignment dengan DPO
+Gunakan Direct Preference Optimization untuk mematangkan gaya bahasa asisten dan meminimalkan halusinasi:
+```powershell
+# Generate dataset preferensi DPO
+python scripts/dataset/generate_dataset_preferences_deepseek.py
+
+# Jalankan DPO training (lightweight)
+python scripts/training/train_dpo_270m_light.py
+```
+
+---
+
+## 💬 Web-based Chat Simulator
+
+Proyek ini dilengkapi dengan aplikasi simulasi chat berbasis web (Flask) untuk menguji model secara langsung melalui antarmuka web interaktif yang modern.
+
+### Cara Menjalankan Chat Simulator:
+1. Pastikan Anda berada di environment Python yang sesuai.
+2. Jalankan server Flask:
+   ```powershell
+   python app/server.py
+   ```
+3. Buka browser Anda dan akses: `http://127.0.0.1:5000`
+
+---
+
+## 📂 Struktur Direktori Proyek
+
+```directory
+t5-gemma-2-instruct/
+├── app/                      # Aplikasi Web Chat Simulator
+│   ├── server.py             # Backend Flask
+│   └── templates/            # Frontend HTML/CSS
+├── data/                     # Dataset (Chat & IndoQA)
+├── docs/                     # Dokumentasi Master, Riset & Infografis
+│   ├── ARCHITECTURE_MASTER.md
+│   ├── project-infographic.png
+│   └── t5_gemma2_training_flow.png
+├── scripts/                  # Kumpulan Skrip Fungsional
+│   ├── analysis/             # Analisis token & arsitektur
+│   ├── dataset/              # Pembuatan & pembersihan dataset
+│   ├── eval/                 # Evaluasi model & metrics
+│   ├── tests/                # Unit testing inference & loss
+│   └── training/             # Skrip SFT, DPO, & Cangkok bobot
+├── inference.py              # Skrip inferensi CLI sederhana
+├── .gitignore                # Konfigurasi pengabaian file Git
+└── README.md                 # Dokumentasi utama (File ini)
+```
+
+---
+*Proyek ini dikembangkan secara aktif untuk eksplorasi arsitektur Seq2Seq pada LLM generasi baru (Gemma 3 & T5-Gemma-2) dalam konteks Bahasa Indonesia.*
