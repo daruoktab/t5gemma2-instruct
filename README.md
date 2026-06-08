@@ -1,6 +1,6 @@
 # 🇮🇩 T5-Gemma-2 Instruct & Chat Pipeline (Bahasa Indonesia)
 
-Pipeline instruksi dan percakapan (instruction-tuning & chat) berbasis arsitektur **Encoder-Decoder (Seq2Seq)** menggunakan **T5-Gemma-2 (4B & 270M)** dengan strategi transplantasi bobot (*weight transplantation* / "Cangkok") dari **Gemma 3 IT**.
+Pipeline instruksi dan percakapan (instruction-tuning & chat) berbasis arsitektur **Encoder-Decoder (Seq2Seq)** menggunakan **T5-Gemma-2 (4B & 270M)** yang dioptimalkan secara penuh menggunakan metode **Supervised Fine-Tuning (SFT)** dan **Direct Preference Optimization (DPO)**.
 
 ---
 
@@ -52,15 +52,17 @@ T5-Gemma-2 tidak memiliki modul `cross_attention` terpisah di decoder. Sebagai g
 
 ---
 
-## 💉 Strategi "Cangkok" Bobot (Weight Transplantation)
+## 🎯 Metode Pelatihan: Supervised Fine-Tuning (SFT) & Alignment (DPO)
 
-Untuk menyuntikkan kemampuan instruksi tanpa pelatihan penuh (*full training*) yang mahal, proyek ini mengimplementasikan metode transplantasi bobot dari **Gemma 3 IT** ke **T5-Gemma-2**:
+Proyek ini melatih model secara langsung menggunakan kombinasi SFT dan DPO pada dataset Bahasa Indonesia berkadar tinggi, menghindari kompleksitas transplantasi bobot:
 
-1. **Vision Transplant (Identik)**:
-   - Vision Tower (SigLIP) dan Multi-modal Projector dicangkok langsung dari Gemma 3 4B IT karena dimensi output yang cocok (1152 ➔ 2560).
-2. **Decoder Transplant (Task Vector Transfer)**:
-   - Menghitung perbedaan kemampuan instruksi: $\Delta = \text{Gemma3\_IT} - \text{Gemma3\_PT}$.
-   - Menyuntikkan delta tersebut ke decoder T5-Gemma-2 dengan skala tertentu ($0.3 - 0.5$). Ini mempertahankan adaptasi UL2 (cross-attention) asli sekaligus mentransfer gaya instruksi.
+1. **Supervised Fine-Tuning (SFT)**:
+   - **T5-Gemma-2 270M**: Pelatihan ringan untuk iterasi cepat dan *smoke testing*.
+   - **T5-Gemma-2 4B-4B**: Pelatihan penuh menggunakan LoRA ($r=128$, $\alpha=256$) melatih $\sim$755 juta parameter ($\sim$10.6% dari total model) pada seluruh dataset (31.299 sampel).
+2. **Logit Masking**:
+   - Memblokir logits untuk token yang tidak digunakan (*unused tokens*) dan token visual di encoder guna memastikan stabilitas generasi teks dan mencegah halusinasi token non-teks.
+3. **Implicit Task Steering & Context Routing (In-Task Learning)**:
+   - Melatih encoder secara implisit untuk memetakan representasi *hidden states* berdasarkan kategori tugas (*Summarization*, *Translation*, *Q&A*) melalui perambatan gradien (*backpropagation*) decoder cross-attention tanpa memerlukan manipulasi prompt statis atau *hardcoding* di backend. Vektor representasi encoder akan mengelompok secara alami sesuai instruksi tugas.
 
 ---
 
