@@ -2,7 +2,6 @@ import os
 import re
 import json
 import torch
-import random
 import datetime
 import matplotlib
 
@@ -281,7 +280,7 @@ def main() -> None:
         "Tokenizer harus PreTrainedTokenizerFast"
     )
 
-    print(f"\nLoading demo datasets...")
+    print("\nLoading demo datasets...")
     train_samples = load_jsonl_samples(CHAT_TRAIN_FILE)
     val_samples   = load_jsonl_samples(CHAT_VAL_FILE)
 

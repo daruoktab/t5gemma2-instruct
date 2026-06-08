@@ -118,6 +118,7 @@ def get_samples():
             first_turn = conv[0]
             system_match = re.search(r'^system:\s*(.*?)(?=\nuser:)', first_turn["input"], re.DOTALL)
             system = system_match.group(1).strip() if system_match else SYSTEM_PROMPT
+            messages.append({"role": "system", "content": system})
             
             raw_input = first_turn["input"]
             if system_match:
@@ -180,7 +181,8 @@ def chat():
             eos_token_id=stop_ids
         )
         
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    raw_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    response = raw_response.strip() if isinstance(raw_response, str) else " ".join(raw_response).strip()
     
     badge = None
     last_user_content = messages[-1]["content"].lower() if messages else ""

@@ -1,7 +1,6 @@
-import os
 import json
 import random
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 def default_system_prompt():
     return (
@@ -86,6 +85,7 @@ def main():
     
     print(f"Loading tokenizer {MODEL_NAME}...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    assert isinstance(tokenizer, PreTrainedTokenizerFast)
     
     fallback_system = default_system_prompt()
     
