@@ -55,7 +55,7 @@ Proyek ini melatih model secara langsung menggunakan kombinasi SFT dan DPO pada 
 
 1. **Supervised Fine-Tuning (SFT)**:
    - **T5-Gemma-2 270M**: Pelatihan ringan untuk iterasi cepat dan *smoke testing*.
-   - **T5-Gemma-2 4B-4B**: Pelatihan penuh menggunakan LoRA ($r=128$, $\alpha=256$) melatih $\sim$755 juta parameter ($\sim$10.6% dari total model) pada seluruh dataset (31.299 sampel).
+   - **T5-Gemma-2 4B-4B**: Pelatihan penuh menggunakan LoRA $(r=128, \alpha=256)$ melatih ~755 juta parameter (~10.6% dari total model) pada seluruh dataset (31.299 sampel).
 2. **Logit Masking**:
    - Memblokir logits untuk token yang tidak digunakan (*unused tokens*) dan token visual di encoder guna memastikan stabilitas generasi teks dan mencegah halusinasi token non-teks.
 3. **Implicit Task Steering & Context Routing (In-Task Learning)**:
@@ -150,7 +150,7 @@ t5-gemma-2-instruct/
 │   ├── dataset/              # Pembuatan & pembersihan dataset
 │   ├── eval/                 # Evaluasi model & metrics
 │   ├── tests/                # Unit testing inference & loss
-│   └── training/             # Skrip SFT, DPO, & Cangkok bobot
+│   └── training/             # Skrip pelatihan SFT dan DPO
 ├── inference.py              # Skrip inferensi CLI sederhana
 ├── .gitignore                # Konfigurasi pengabaian file Git
 └── README.md                 # Dokumentasi utama (File ini)
