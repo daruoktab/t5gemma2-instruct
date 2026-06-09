@@ -39,7 +39,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained("google/t5gemma-2-270m-270m", trust_remote_code=True)
     
     print("Loading dataset...")
-    ds = load_dataset('daruokta/t5gemma2-indonesia-chat-formatted', 'chat_sft', split='train')
+    ds = load_dataset('daruokta/t5gemma2-indonesia-chat-formatted', 'chat_multiturn', split='train')
     
     sample = ds[0]
     print("\n--- ORIGINAL DATASET ROW ---")

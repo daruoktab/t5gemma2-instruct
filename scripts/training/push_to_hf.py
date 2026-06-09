@@ -8,7 +8,7 @@ import os
 # ============================================================
 BASE_MODEL = "google/t5gemma-2-270m-270m"
 # Path adapter terakhir (silakan sesuaikan jika ingin SFT atau DPO)
-ADAPTER_PATH = "results/t5gemma2-270m-sft/final_adapter"
+ADAPTER_PATH = "results/t5gemma2-270m-clean-sft/final_adapter"
 REPO_NAME = "daruoktab/t5gemma2-instruct"
 
 

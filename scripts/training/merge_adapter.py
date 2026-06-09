@@ -21,8 +21,8 @@ from peft import PeftModel
 # Configuration
 # ============================================================
 BASE_MODEL = "google/t5gemma-2-270m-270m"
-ADAPTER_PATH = "../t5gemma2-chat-v1/final"
-MERGED_PATH = "../t5gemma2-chat-v1/merged"
+ADAPTER_PATH = "results/t5gemma2-270m-clean-sft/final_adapter"
+MERGED_PATH = "results/t5gemma2-270m-clean-sft/merged"
 
 
 def merge_and_save(push_to_hub: Optional[str] = None):

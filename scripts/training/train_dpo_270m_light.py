@@ -205,8 +205,8 @@ class Seq2SeqDPOTrainer(DPOTrainer):
 # ==========================================
 # KONFIGURASI HYPERPARAMETER
 # ==========================================
-MODEL_NAME = "models/t5gemma2-270m-task-vector"
-SFT_ADAPTER_DIR = "results/t5gemma2-270m-sft/final_adapter"
+MODEL_NAME = "google/t5gemma-2-270m-270m"
+SFT_ADAPTER_DIR = "results/t5gemma2-270m-clean-sft/final_adapter"
 OUTPUT_DIR = "results/t5gemma2-270m-dpo"
 
 DPO_DATA_FILE = "data/preferences_dpo_light.jsonl"

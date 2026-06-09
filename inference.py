@@ -23,12 +23,16 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR   = os.path.normpath(os.path.join(_SCRIPT_DIR, ".."))
 
 BASE_MODEL   = "google/t5gemma-2-270m-270m"
-ADAPTER_PATH = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-sft", "final")
-MERGED_PATH  = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-sft", "merged")
+ADAPTER_PATH = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-clean-sft", "final_adapter")
+if not os.path.exists(ADAPTER_PATH):
+    ADAPTER_PATH = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-sft", "final")
+MERGED_PATH  = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-clean-sft", "merged")
+if not os.path.exists(MERGED_PATH):
+    MERGED_PATH = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-sft", "merged")
 MAX_NEW_TOKENS = 256
 
-# Auto-detect checkpoint terbaru jika 'final' belum ada
-_adapter_base = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-sft")
+# Auto-detect checkpoint terbaru jika 'final_adapter' belum ada
+_adapter_base = os.path.join(_SCRIPT_DIR, "results", "t5gemma2-270m-clean-sft")
 if not os.path.exists(ADAPTER_PATH) and os.path.exists(_adapter_base):
     _checkpoints = sorted(
         [d for d in os.listdir(_adapter_base) if d.startswith("checkpoint-")],
@@ -36,11 +40,37 @@ if not os.path.exists(ADAPTER_PATH) and os.path.exists(_adapter_base):
     )
     if _checkpoints:
         ADAPTER_PATH = os.path.join(_adapter_base, _checkpoints[-1])
-        print(f"  'final' tidak ditemukan, pakai checkpoint: {ADAPTER_PATH}")
+        print(f"  'final_adapter' tidak ditemukan, pakai checkpoint: {ADAPTER_PATH}")
+
+# Token IDs yang harus di-suppress (unused + vision)
+SUPPRESS_BLOCK1 = list(range(6, 105))         # <unused0>–<unused98>
+SUPPRESS_BLOCK2 = list(range(256002, 262144))  # <unused100>–<unused6241>
+SUPPRESS_VISION = [255999, 256000, 256001]     # <end_of_image>, <image_soft_token>
+ALL_SUPPRESS_IDS = set(SUPPRESS_BLOCK1 + SUPPRESS_BLOCK2 + SUPPRESS_VISION)
 
 
+def apply_logit_mask(model, suppress_ids):
+    """
+    Menerapkan logit masking secara dinamis lewat PyTorch forward hook.
+    """
+    vocab_size = model.config.vocab_size
+    suppress_list = [i for i in suppress_ids if i < vocab_size]
+    
+    mask = torch.zeros(vocab_size, dtype=torch.bfloat16)
+    mask[suppress_list] = -10000.0
+    
+    def forward_hook(module, inputs, outputs):
+        if hasattr(outputs, "logits"):
+            outputs.logits.add_(mask.to(outputs.logits.device))
+        elif isinstance(outputs, tuple):
+            outputs[0].add_(mask.to(outputs[0].device))
+        return outputs
+        
+    model.register_forward_hook(forward_hook)
+    print(f"  ✅ Logit masking registered untuk {len(suppress_list)} suppressed tokens.")
 
-def load_model(use_merged: bool = False):
+
+def load_model(use_merged: bool = False, adapter_path: str | None = None):
     """Load model - either LoRA adapter or merged model."""
 
     if use_merged:
@@ -52,9 +82,11 @@ def load_model(use_merged: bool = False):
             device_map="auto",
             attn_implementation="eager",
         )
+        apply_logit_mask(model, ALL_SUPPRESS_IDS)
     else:
-        print("Loading base model + LoRA adapter...")
-        tokenizer = AutoTokenizer.from_pretrained(ADAPTER_PATH)
+        path = adapter_path or ADAPTER_PATH
+        print(f"Loading base model + LoRA adapter from {path}...")
+        tokenizer = AutoTokenizer.from_pretrained(path)
 
         model = AutoModelForSeq2SeqLM.from_pretrained(
             BASE_MODEL,
@@ -62,9 +94,10 @@ def load_model(use_merged: bool = False):
             device_map="auto",
             attn_implementation="eager",
         )
+        apply_logit_mask(model, ALL_SUPPRESS_IDS)
 
-        print("Applying LoRA adapter...")
-        model = PeftModel.from_pretrained(model, ADAPTER_PATH)
+        print(f"Applying LoRA adapter from {path}...")
+        model = PeftModel.from_pretrained(model, path)
 
     model.eval()
     print(f"Model loaded on: {model.device}")
@@ -328,13 +361,14 @@ def run_interactive(model, tokenizer):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="T5Gemma2 Instruction Model Inference")
+    parser.add_argument("--adapter", type=str, default=None, help="Path to LoRA adapter directory")
     parser.add_argument("--merged", action="store_true", help="Use merged model instead of LoRA adapter")
     parser.add_argument("--no-interactive", action="store_true", help="Skip interactive mode")
     parser.add_argument("--no-examples", action="store_true", help="Skip test examples")
     args = parser.parse_args()
 
     # Load model
-    model, tokenizer = load_model(use_merged=args.merged)
+    model, tokenizer = load_model(use_merged=args.merged, adapter_path=args.adapter)
 
     # Run test examples
     if not args.no_examples:

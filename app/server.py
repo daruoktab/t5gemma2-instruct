@@ -13,8 +13,14 @@ MODEL_NAME = "google/t5gemma-2-270m-270m"
 # Resolve paths relative to repository root
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, ".."))
-ADAPTER_PATH = os.path.join(ROOT_DIR, "results", "t5gemma2-270m-demo-100", "final_adapter")
+ADAPTER_PATH = os.path.join(ROOT_DIR, "results", "t5gemma2-270m-clean-sft", "final_adapter")
 VAL_DATA_PATH = os.path.join(ROOT_DIR, "data", "chat_val_demo.jsonl")
+
+# Token IDs yang harus di-suppress (unused + vision)
+SUPPRESS_BLOCK1 = list(range(6, 105))         # <unused0>–<unused98>
+SUPPRESS_BLOCK2 = list(range(256002, 262144))  # <unused100>–<unused6241>
+SUPPRESS_VISION = [255999, 256000, 256001]     # <end_of_image>, <image_soft_token>
+ALL_SUPPRESS_IDS = set(SUPPRESS_BLOCK1 + SUPPRESS_BLOCK2 + SUPPRESS_VISION)
 
 # Global model and tokenizer
 tokenizer = None
@@ -28,6 +34,26 @@ SYSTEM_PROMPT = (
     "Kamu adalah asisten AI yang helpful, santai, dan ramah. "
     "Gunakan Bahasa Indonesia sebagai bahasa utama."
 )
+
+def apply_logit_mask(model, suppress_ids):
+    """
+    Menerapkan logit masking secara dinamis lewat PyTorch forward hook.
+    """
+    vocab_size = model.config.vocab_size
+    suppress_list = [i for i in suppress_ids if i < vocab_size]
+    
+    mask = torch.zeros(vocab_size, dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32)
+    mask[suppress_list] = -10000.0
+    
+    def forward_hook(module, inputs, outputs):
+        if hasattr(outputs, "logits"):
+            outputs.logits.add_(mask.to(outputs.logits.device))
+        elif isinstance(outputs, tuple):
+            outputs[0].add_(mask.to(outputs[0].device))
+        return outputs
+        
+    model.register_forward_hook(forward_hook)
+    print(f"  ✅ Logit masking registered untuk {len(suppress_list)} suppressed tokens.")
 
 def init_model():
     global tokenizer, model
@@ -44,6 +70,9 @@ def init_model():
     
     if not torch.cuda.is_available():
         base_model = base_model.to(device)
+        
+    # Terapkan logit masking sebelum dimuat ke PeftModel
+    apply_logit_mask(base_model, ALL_SUPPRESS_IDS)
         
     if os.path.exists(ADAPTER_PATH):
         print(f"Loading LoRA adapter from {ADAPTER_PATH}...")

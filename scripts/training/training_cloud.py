@@ -70,7 +70,7 @@ SAMPLE_VAL_INDOQA = 50       # Jumlah sampel QA untuk validation/eval_loss
 
 # GENERATION EVALUATION CONFIG
 SAMPLE_EVAL_GENERATION = 10  # Jumlah sampel dari validation set untuk pengujian teks generasi di log
-EVAL_EVERY_N_STEPS = 25      # Jalankan evaluasi loss & generasi setiap N steps
+EVAL_EVERY_N_STEPS = 50      # Jalankan evaluasi loss & generasi setiap N steps
 
 # SYSTEM PROMPT FALLBACK
 SYSTEM_PROMPT = (
@@ -445,6 +445,11 @@ model = AutoModelForSeq2SeqLM.from_pretrained(
     device_map="auto"
 )
 
+# Reset max_length to silence warning about max_new_tokens taking precedence
+model.config.max_length = None
+if hasattr(model, "generation_config") and model.generation_config is not None:
+    model.generation_config.max_length = None
+
 if getattr(model.config, "decoder_start_token_id", None) is None:
     model.config.decoder_start_token_id = tokenizer.bos_token_id
     print(f"  Set decoder_start_token_id = {model.config.decoder_start_token_id}")
@@ -526,7 +531,7 @@ training_args = Seq2SeqTrainingArguments(
     weight_decay=0.01,
     lr_scheduler_type="cosine",
     predict_with_generate=True,
-    logging_steps=10,
+    logging_steps=25,
     save_strategy="steps",
     save_steps=EVAL_EVERY_N_STEPS,
     save_total_limit=2,
