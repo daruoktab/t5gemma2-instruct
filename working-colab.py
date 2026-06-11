@@ -1400,7 +1400,10 @@ def _(OUTPUT_DIR, mo, os, re):
         # Pilihan dropdown untuk memilih Step/Waktu Run
         run_options = {run["label"]: idx for idx, run in enumerate(evaluation_runs)}
         step_dropdown = mo.ui.dropdown(
-            options=run_options, value=0, label="Pilih Step Evaluasi:", full_width=True
+            options=run_options,
+            value=next(iter(run_options)),
+            label="Pilih Step Evaluasi:",
+            full_width=True,
         )
 
         # Ambil sampel berdasarkan pilihan dropdown
