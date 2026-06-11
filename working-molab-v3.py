@@ -1212,13 +1212,14 @@ def _(tokenizer, trainer):
         print("✅ Berhasil mengunggah model adapter dan tokenizer ke Hugging Face Hub!")
     except Exception as e:
         print(f"❌ Terjadi kesalahan saat mengunggah: {e}")
-
     return
 
 
 @app.cell(hide_code=True)
-def _(OUTPUT_DIR, mo, os, re):
-    mo.md("## 📊 Visualisasi Hasil Evaluasi Kualitatif")
+def _(mo):
+    mo.md("""
+    ## 📊 Visualisasi Hasil Evaluasi Kualitatif
+    """)
     return
 
 
@@ -1422,10 +1423,10 @@ def _(OUTPUT_DIR, mo, os, re):
                 <div class="sample-body">
                     <div class="section-title">💬 User Prompt</div>
                     <pre class="text-block prompt-block">{s["query"]}</pre>
-                    
+
                     <div class="section-title">🎯 Expected Target</div>
                     <div class="text-block target-block">{s["target"]}</div>
-                    
+
                     <div class="section-title">🤖 Model Response</div>
                     <div class="text-block response-block">{s["response"]}</div>
                 </div>
@@ -1452,18 +1453,7 @@ def _(OUTPUT_DIR, mo, os, re):
         )
 
     mo.vstack([refresh_button, mo.hstack([output], justify="start")])
-    return (
-        css_style,
-        evaluation_runs,
-        log_file_path,
-        output,
-        parse_log_file,
-        refresh_button,
-        run_options,
-        selected_idx,
-        selected_run,
-        step_dropdown,
-    )
+    return
 
 
 if __name__ == "__main__":

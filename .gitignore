@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 /results/
 /test_output_270m/
+/.obsidian
+/.agents
+skills-lock.json

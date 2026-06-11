@@ -117,8 +117,8 @@ def generate_response(
     temperature: float = 0.7,
     top_p: float = 0.9,
     top_k: int = 50,
-    repetition_penalty: float = 1.3,  # v2: naik dari 1.1 ke 1.3
-    no_repeat_ngram_size: int = 4,
+    repetition_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 0,
     num_beams: int = 1,
 ) -> str:
     """
@@ -132,6 +132,7 @@ def generate_response(
         return_tensors="pt",
         max_length=512,
         truncation=True,
+        add_special_tokens=False,
     ).to(model.device)
 
     gen_kwargs: dict = {
@@ -251,7 +252,7 @@ def run_test_examples(model, tokenizer):
         SYSTEM_PROMPT = "Kamu adalah asisten AI yang helpful, santai, dan ramah. Gunakan Bahasa Indonesia sebagai bahasa utama."
         formatted_prompt = f"<start_of_turn>user\n{SYSTEM_PROMPT}\n\n{prompt}<end_of_turn>\n<start_of_turn>model\n"
 
-        # Gunakan beam search untuk translation/summarization, sampling untuk lainnya
+        # Gunakan beam search untuk translation/summarization, greedy search untuk lainnya
         if "Translation" in category or "Summarization" in category:
             response = generate_response(
                 model, tokenizer, formatted_prompt,
@@ -260,7 +261,7 @@ def run_test_examples(model, tokenizer):
         else:
             response = generate_response(
                 model, tokenizer, formatted_prompt,
-                do_sample=True, temperature=0.7
+                do_sample=False
             )
 
         print(f"Output: {response}")
