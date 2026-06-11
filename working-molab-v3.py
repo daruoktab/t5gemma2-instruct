@@ -11,7 +11,7 @@
 #     "peft==0.19.1",
 #     "rouge-score==0.1.2",
 #     "torch==2.12.0",
-#     "transformers==5.10.2",
+#     "transformers==5.11.0",
 # ]
 # ///
 
