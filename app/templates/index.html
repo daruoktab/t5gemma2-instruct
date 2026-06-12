@@ -7,6 +7,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
     <style>
         :root {
             --bg-main: #090d16;
@@ -421,6 +424,111 @@
             background-color: #1e293b;
             border-radius: 10px;
         }
+
+        /* Beautiful Markdown Styling */
+        .bubble h1, .bubble h2, .bubble h3, .bubble h4, .bubble h5, .bubble h6 {
+            font-family: var(--font-title);
+            margin-top: 0.75rem;
+            margin-bottom: 0.5rem;
+            color: #ffffff;
+            font-weight: 600;
+        }
+        .bubble h1 { font-size: 1.35rem; }
+        .bubble h2 { font-size: 1.2rem; }
+        .bubble h3 { font-size: 1.05rem; }
+        .bubble p {
+            margin-bottom: 0.75rem;
+        }
+        .bubble p:last-child {
+            margin-bottom: 0;
+        }
+        .bubble ul, .bubble ol {
+            margin-left: 1.5rem;
+            margin-bottom: 0.75rem;
+            padding-left: 0;
+        }
+        .bubble li {
+            margin-bottom: 0.35rem;
+        }
+        .bubble blockquote {
+            border-left: 4px solid #a855f7;
+            background-color: rgba(168, 85, 247, 0.05);
+            padding: 0.5rem 0.75rem;
+            margin: 0.75rem 0;
+            color: var(--text-secondary);
+            font-style: italic;
+            border-radius: 0 8px 8px 0;
+        }
+        .bubble pre {
+            background-color: #0b0f19;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            padding: 0.75rem;
+            overflow-x: auto;
+            margin: 0.75rem 0;
+        }
+        .bubble code {
+            font-family: 'Fira Code', Consolas, Monaco, monospace;
+            font-size: 0.85rem;
+            background-color: rgba(255, 255, 255, 0.08);
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            color: #e5c07b;
+        }
+        .bubble pre code {
+            background-color: transparent;
+            padding: 0;
+            color: inherit;
+        }
+        .bubble table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 0.75rem 0;
+            font-size: 0.9rem;
+        }
+        .bubble th, .bubble td {
+            border: 1px solid #1e293b;
+            padding: 0.5rem;
+            text-align: left;
+        }
+        .bubble th {
+            background-color: #161e2e;
+            font-weight: 600;
+        }
+        .bubble tr:nth-child(even) {
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+
+        /* Checklist Box Custom Rendering */
+        .checkbox-container {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            margin-bottom: 0.25rem;
+            list-style: none !important;
+        }
+        .checkbox-box {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            border: 2px solid var(--text-secondary);
+            margin-top: 3px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.2s ease;
+        }
+        .checkbox-box.checked {
+            border-color: #10b981;
+            background-color: #10b981;
+        }
+        .checkbox-box.checked::after {
+            content: "✓";
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -454,6 +562,56 @@
                     <h3>Interactive Custom Chat</h3>
                     <p>Kirim chat kustom apa saja secara bebas untuk menguji fleksibilitas model.</p>
                 </button>
+            </div>
+
+            <div class="sidebar-section">
+                <span class="sidebar-section-title">Model Configuration</span>
+                <div class="demo-runner-panel" style="padding: 1.25rem;">
+                    <div style="display: flex; flex-direction: column; gap: 0.85rem;">
+                        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                            <label for="base-model-select" style="font-size: 0.8rem; color: var(--text-secondary); font-weight: 500;">Base Model:</label>
+                            <select id="base-model-select" class="chat-input" style="padding: 0.5rem; font-size: 0.85rem; height: auto;" onchange="updateAdapterPresets()">
+                                <option value="google/t5gemma-2-1b-1b">google/t5gemma-2-1b-1b (1B)</option>
+                                <option value="google/t5gemma-2-270m-270m">google/t5gemma-2-270m-270m (270M)</option>
+                            </select>
+                        </div>
+                        
+                        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                            <label for="adapter-select" style="font-size: 0.8rem; color: var(--text-secondary); font-weight: 500;">LoRA Adapter:</label>
+                            <select id="adapter-select" class="chat-input" style="padding: 0.5rem; font-size: 0.85rem; height: auto;" onchange="toggleCustomAdapterInput()">
+                                <!-- Will be populated dynamically by JavaScript -->
+                            </select>
+                            <input type="text" id="custom-adapter-input" class="chat-input" style="padding: 0.5rem; font-size: 0.85rem; margin-top: 0.25rem; display: none;" placeholder="Repo ID (e.g. username/repo) or Local Path">
+                        </div>
+                        
+                        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-secondary);">
+                                <span>Temperature (Creativity):</span>
+                                <span id="temp-value" style="font-weight: 600;">0.7</span>
+                            </div>
+                            <input type="range" id="temp-slider" min="0.0" max="1.5" step="0.1" value="0.7" style="width: 100%;" oninput="document.getElementById('temp-value').innerText = this.value">
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-secondary);">
+                                <span>Repetition Penalty:</span>
+                                <span id="rep-value" style="font-weight: 600;">1.0</span>
+                            </div>
+                            <input type="range" id="rep-slider" min="1.0" max="2.0" step="0.05" value="1.0" style="width: 100%;" oninput="document.getElementById('rep-value').innerText = this.value">
+                        </div>
+                        
+                        <button class="send-btn" id="load-model-btn" onclick="loadSelectedModel()" style="padding: 0.75rem; font-size: 0.85rem; margin-top: 0.25rem;">Load Selected Model</button>
+                        
+                        <div id="model-loading-status" style="font-size: 0.8rem; text-align: center; color: var(--text-secondary); display: none;">
+                            <div class="typing-indicator" style="justify-content: center; margin-bottom: 0.25rem;">
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+                                <div class="typing-dot"></div>
+                            </div>
+                            <span>Pemuatan model sedang berlangsung...</span>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Demo Steps runner -->
@@ -527,6 +685,144 @@
             "Parafrase lebih formal."
         ];
 
+        // Configure marked.js to render code blocks with highlight.js integration
+        marked.setOptions({
+            highlight: function(code, lang) {
+                const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                return hljs.highlight(code, { language }).value;
+            },
+            langPrefix: 'hljs language-',
+            breaks: true,
+            gfm: true
+        });
+
+        // Custom renderer for checklists/checkboxes
+        const renderer = new marked.Renderer();
+        renderer.listitem = function(text, task, checked) {
+            if (task) {
+                // If it's a checkbox, render it using our custom CSS classes
+                const checkedClass = checked ? 'checked' : '';
+                // Strip the default checkbox HTML if any was generated
+                const cleanText = text.replace(/<input[^>]*checkbox[^>]*>/gi, '').trim();
+                return `<li class="checkbox-container"><span class="checkbox-box ${checkedClass}"></span><span>${cleanText}</span></li>`;
+            }
+            return `<li>${text}</li>`;
+        };
+        marked.use({ renderer });
+
+        // Presets configuration
+        const adapterPresets = {
+            "google/t5gemma-2-1b-1b": [
+                { value: "daruokta/t5gemma-2-1b-1b-instruct-chat-indo-v2-exp", text: "v4-exp SFT Adapter (Experimental)" },
+                { value: "daruokta/t5gemma-2-1b-1b-instruct-chat-indo-v2", text: "v4 SFT Adapter (Standard)" },
+                { value: "none", text: "None (Base Model Only)" },
+                { value: "custom", text: "Custom Adapter..." }
+            ],
+            "google/t5gemma-2-270m-270m": [
+                { value: "none", text: "None (Base Model Only)" },
+                { value: "custom", text: "Custom Adapter..." }
+            ]
+        };
+
+        function updateAdapterPresets(selectedAdapterValue = null) {
+            const baseModel = document.getElementById('base-model-select').value;
+            const adapterSelect = document.getElementById('adapter-select');
+            
+            adapterSelect.innerHTML = '';
+            
+            const presets = adapterPresets[baseModel] || [];
+            presets.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.value;
+                opt.innerText = p.text;
+                adapterSelect.appendChild(opt);
+            });
+
+            // Set selected value if matching presets
+            if (selectedAdapterValue) {
+                const presetValues = presets.map(p => p.value);
+                if (presetValues.includes(selectedAdapterValue)) {
+                    adapterSelect.value = selectedAdapterValue;
+                } else {
+                    adapterSelect.value = 'custom';
+                    document.getElementById('custom-adapter-input').value = selectedAdapterValue;
+                }
+            }
+
+            toggleCustomAdapterInput();
+        }
+
+        function toggleCustomAdapterInput() {
+            const val = document.getElementById('adapter-select').value;
+            const customInput = document.getElementById('custom-adapter-input');
+            customInput.style.display = (val === 'custom') ? 'block' : 'none';
+        }
+
+        // Fetch currently loaded model from backend on start
+        async function fetchModelStatus() {
+            try {
+                const res = await fetch('/api/model_status');
+                const status = await res.json();
+                
+                if (status.base_model) {
+                    document.getElementById('base-model-select').value = status.base_model;
+                    updateAdapterPresets(status.adapter);
+                    
+                    // Update header title dynamically
+                    let modelNameShort = status.base_model.split('/').pop().toUpperCase();
+                    let adapterShort = status.adapter && status.adapter !== 'none' ? " + " + status.adapter.split('/').pop() : "";
+                    document.querySelector('header h1').innerText = `T5Gemma-2 (${modelNameShort}${adapterShort})`;
+                }
+            } catch (err) {
+                console.error("Gagal mendapatkan status model:", err);
+            }
+        }
+
+        // Load selected model to backend memory
+        async function loadSelectedModel() {
+            const baseModel = document.getElementById('base-model-select').value;
+            const adapterSelect = document.getElementById('adapter-select').value;
+            const customAdapter = document.getElementById('custom-adapter-input').value.trim();
+            
+            const adapter = (adapterSelect === 'custom') ? customAdapter : adapterSelect;
+            
+            const btn = document.getElementById('load-model-btn');
+            const statusDiv = document.getElementById('model-loading-status');
+            
+            btn.disabled = true;
+            btn.innerText = 'Loading...';
+            statusDiv.style.display = 'block';
+
+            try {
+                const res = await fetch('/api/load_model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_model: baseModel, adapter: adapter })
+                });
+                const data = await res.json();
+                
+                statusDiv.style.display = 'none';
+                btn.disabled = false;
+                btn.innerText = 'Load Selected Model';
+
+                if (data.status === 'success') {
+                    // Update Header Title
+                    let modelNameShort = data.base_model.split('/').pop().toUpperCase();
+                    let adapterShort = data.adapter && data.adapter !== 'none' ? " + " + data.adapter.split('/').pop() : "";
+                    document.querySelector('header h1').innerText = `T5Gemma-2 (${modelNameShort}${adapterShort})`;
+                    
+                    alert(`✅ Sukses memuat model:\nBase: ${data.base_model}\nAdapter: ${data.adapter}`);
+                } else {
+                    alert(`❌ Gagal memuat model: ${data.message}`);
+                }
+            } catch (err) {
+                statusDiv.style.display = 'none';
+                btn.disabled = false;
+                btn.innerText = 'Load Selected Model';
+                alert('❌ Gagal menghubungi server pemuatan model.');
+            }
+        }
+
         function switchMode(mode) {
             currentMode = mode;
             document.querySelectorAll('.card-btn').forEach(btn => btn.classList.remove('active'));
@@ -575,11 +871,18 @@
             document.getElementById(`step-${stepNum}-btn`).disabled = true;
             appendTypingIndicator();
 
+            const temp = parseFloat(document.getElementById('temp-slider').value);
+            const repPenalty = parseFloat(document.getElementById('rep-slider').value);
+
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: chatHistory })
+                    body: JSON.stringify({ 
+                        messages: chatHistory,
+                        temperature: temp,
+                        repetition_penalty: repPenalty
+                    })
                 });
                 const data = await response.json();
                 
@@ -669,15 +972,22 @@
             
             // Remove controls temporarily
             const controls = document.getElementById('sample-controls');
-            controls.remove();
+            if (controls) controls.remove();
 
             appendTypingIndicator();
+
+            const temp = parseFloat(document.getElementById('temp-slider').value);
+            const repPenalty = parseFloat(document.getElementById('rep-slider').value);
 
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: chatHistory })
+                    body: JSON.stringify({ 
+                        messages: chatHistory,
+                        temperature: temp,
+                        repetition_penalty: repPenalty
+                    })
                 });
                 const data = await response.json();
                 
@@ -727,7 +1037,7 @@
 
         async function sendMessage() {
             const input = document.getElementById('message-input');
-            const text = input.value.strip ? input.value.strip() : input.value.trim();
+            const text = input.value.trim();
             if (!text) return;
 
             input.value = '';
@@ -736,11 +1046,18 @@
 
             appendTypingIndicator();
 
+            const temp = parseFloat(document.getElementById('temp-slider').value);
+            const repPenalty = parseFloat(document.getElementById('rep-slider').value);
+
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: chatHistory })
+                    body: JSON.stringify({ 
+                        messages: chatHistory,
+                        temperature: temp,
+                        repetition_penalty: repPenalty
+                    })
                 });
                 const data = await response.json();
                 
@@ -759,14 +1076,38 @@
             }
         }
 
+        // Custom parser function to handle checkbox format quirks from the SFT model
+        function preprocessCheckboxes(rawText) {
+            let text = rawText;
+            
+            // Normalize unchecked boxes
+            text = text.replace(/-\s*\\?\[\s*\\?\]/g, '- [ ]');
+            text = text.replace(/-\s*\$\[\s*\]/g, '- [ ]');
+            text = text.replace(/-\s*\[\s*-\s*\]/g, '- [ ]');
+            text = text.replace(/-\s*\(\s*\)/g, '- [ ]');
+            text = text.replace(/-\s*\[\s*\.\s*\]/g, '- [ ]');
+            
+            // Normalize checked boxes
+            text = text.replace(/-\s*\[\s*[xvV✓]\s*\]/g, '- [x]');
+            text = text.replace(/-\s*\(\s*[xvV✓]\s*\)/g, '- [x]');
+
+            // Strip out trailing gibberish character loops generated by token errors
+            text = text.replace(/\n\s*[-‘'’"“”—\s]{10,}$/g, '');
+            
+            return text;
+        }
+
         function appendUserMessage(text) {
             const container = document.getElementById('chat-messages');
             const row = document.createElement('div');
             row.className = 'message-row user';
+            
+            const parsedHtml = marked.parse(text);
+
             row.innerHTML = `
                 <div class="bubble">
                     <div class="bubble-header">USER</div>
-                    ${text}
+                    <div class="markdown-body">${parsedHtml}</div>
                 </div>
             `;
             container.appendChild(row);
@@ -783,16 +1124,24 @@
                 badgeHtml = `<span class="task-badge ${badgeText.toLowerCase()}">${badgeText}</span>`;
             }
 
+            const cleanedText = preprocessCheckboxes(text);
+            const parsedHtml = marked.parse(cleanedText);
+
             row.innerHTML = `
                 <div class="bubble">
                     <div class="bubble-header">
                         <span>MODEL</span>
                         ${badgeHtml}
                     </div>
-                    ${text}
+                    <div class="markdown-body">${parsedHtml}</div>
                 </div>
             `;
             container.appendChild(row);
+            
+            row.querySelectorAll('pre code').forEach((el) => {
+                hljs.highlightElement(el);
+            });
+            
             scrollToBottom();
         }
 
@@ -800,13 +1149,22 @@
             const container = document.getElementById('chat-messages');
             const row = document.createElement('div');
             row.className = 'message-row model';
+            
+            const cleanedText = preprocessCheckboxes(text);
+            const parsedHtml = marked.parse(cleanedText);
+
             row.innerHTML = `
                 <div class="bubble" style="background-color: #0f172a; border-style: dashed; border-color: #3b82f6;">
                     <div class="bubble-header" style="color: #60a5fa;">EXPECTED TARGET (DATASET)</div>
-                    ${text}
+                    <div class="markdown-body">${parsedHtml}</div>
                 </div>
             `;
             container.appendChild(row);
+            
+            row.querySelectorAll('pre code').forEach((el) => {
+                hljs.highlightElement(el);
+            });
+            
             scrollToBottom();
         }
 
@@ -838,6 +1196,12 @@
             const container = document.getElementById('chat-messages');
             container.scrollTop = container.scrollHeight;
         }
+
+        window.onload = function() {
+            updateAdapterPresets();
+            fetchModelStatus();
+            switchMode('demo');
+        };
     </script>
 </body>
 </html>

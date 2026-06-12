@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import gc
 import torch
 from flask import Flask, request, jsonify, render_template
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -8,12 +9,12 @@ from peft import PeftModel
 
 app = Flask(__name__, template_folder='templates')
 
-MODEL_NAME = "google/t5gemma-2-270m-270m"
+DEFAULT_BASE_MODEL = "google/t5gemma-2-1b-1b"
+DEFAULT_ADAPTER = "daruokta/t5gemma-2-1b-1b-instruct-chat-indo-v2-exp"
 
 # Resolve paths relative to repository root
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, ".."))
-ADAPTER_PATH = os.path.join(ROOT_DIR, "results", "t5gemma2-270m-clean-sft", "final_adapter")
 VAL_DATA_PATH = os.path.join(ROOT_DIR, "data", "chat_val_demo.jsonl")
 
 # Token IDs yang harus di-suppress (unused + vision)
@@ -25,6 +26,8 @@ ALL_SUPPRESS_IDS = set(SUPPRESS_BLOCK1 + SUPPRESS_BLOCK2 + SUPPRESS_VISION)
 # Global model and tokenizer
 tokenizer = None
 model = None
+current_base_model = None
+current_adapter = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 MAX_SOURCE_LENGTH = 4096
@@ -55,14 +58,82 @@ def apply_logit_mask(model, suppress_ids):
     model.register_forward_hook(forward_hook)
     print(f"  ✅ Logit masking registered untuk {len(suppress_list)} suppressed tokens.")
 
-def init_model():
-    global tokenizer, model
-    print(f"Loading tokenizer {MODEL_NAME}...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+def load_model_and_tokenizer(base_model_name, adapter_name_or_path=None):
+    global tokenizer, model, current_base_model, current_adapter
     
-    print(f"Loading base model {MODEL_NAME}...")
+    print("\nUnloading previous model (if any)...")
+    model = None
+    tokenizer = None
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        
+    # Resolve adapter path locally if it's on HF Hub to bypass PEFT subfolder bugs
+    adapter_path = adapter_name_or_path
+    if adapter_name_or_path and adapter_name_or_path.strip().lower() != "none" and not os.path.exists(adapter_name_or_path):
+        from huggingface_hub import snapshot_download
+        print(f"Downloading adapter snapshot from HF Hub repo '{adapter_name_or_path}'...")
+        try:
+            local_dir = snapshot_download(
+                repo_id=adapter_name_or_path,
+                allow_patterns=[
+                    "final_adapter/*",
+                    "checkpoint-1225/*",
+                    "checkpoint-1000/*",
+                    "adapter_config.json",
+                    "adapter_model.bin",
+                    "adapter_model.safetensors",
+                    "README.md"
+                ]
+            )
+            print(f"Snapshot downloaded to: {local_dir}")
+            
+            # Find the best adapter directory
+            final_adapter_dir = os.path.join(local_dir, "final_adapter")
+            checkpoint_1225_dir = os.path.join(local_dir, "checkpoint-1225")
+            checkpoint_1000_dir = os.path.join(local_dir, "checkpoint-1000")
+            
+            if os.path.exists(final_adapter_dir) and os.path.exists(os.path.join(final_adapter_dir, "adapter_config.json")):
+                adapter_path = final_adapter_dir
+                print(f"Found 'final_adapter' subfolder: {adapter_path}")
+            elif os.path.exists(checkpoint_1225_dir) and os.path.exists(os.path.join(checkpoint_1225_dir, "adapter_config.json")):
+                adapter_path = checkpoint_1225_dir
+                print(f"Found 'checkpoint-1225' subfolder: {adapter_path}")
+            elif os.path.exists(checkpoint_1000_dir) and os.path.exists(os.path.join(checkpoint_1000_dir, "adapter_config.json")):
+                adapter_path = checkpoint_1000_dir
+                print(f"Found 'checkpoint-1000' subfolder: {adapter_path}")
+            elif os.path.exists(os.path.join(local_dir, "adapter_config.json")):
+                adapter_path = local_dir
+                print(f"Using snapshot root: {adapter_path}")
+            else:
+                # Scan for any checkpoint directory
+                subdirs = [os.path.join(local_dir, d) for d in os.listdir(local_dir) if os.path.isdir(os.path.join(local_dir, d))]
+                checkpoint_dirs = [d for d in subdirs if "checkpoint-" in os.path.basename(d)]
+                if checkpoint_dirs:
+                    def get_num(folder):
+                        match = re.search(r'\d+', os.path.basename(folder))
+                        return int(match.group(0)) if match else 0
+                    checkpoint_dirs.sort(key=get_num)
+                    adapter_path = checkpoint_dirs[-1]
+                    print(f"Found auto-detected checkpoint folder: {adapter_path}")
+                else:
+                    adapter_path = local_dir
+                    print(f"No adapter config found in subdirectories. Trying snapshot root: {adapter_path}")
+        except Exception as e:
+            print(f"Failed to download adapter snapshot: {e}. Will try default Hub resolution.")
+            adapter_path = adapter_name_or_path
+
+    print(f"Loading tokenizer for {base_model_name}...")
+    tok_path = adapter_path if (adapter_path and os.path.exists(adapter_path)) else base_model_name
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(tok_path, trust_remote_code=True)
+    except Exception as tok_err:
+        print(f"Failed to load tokenizer from {tok_path}: {tok_err}. Falling back to base model tokenizer.")
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
+        
+    print(f"Loading base model {base_model_name}...")
     base_model = AutoModelForSeq2SeqLM.from_pretrained(
-        MODEL_NAME,
+        base_model_name,
         trust_remote_code=True,
         dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
         device_map="auto" if torch.cuda.is_available() else None
@@ -71,18 +142,48 @@ def init_model():
     if not torch.cuda.is_available():
         base_model = base_model.to(device)
         
-    # Terapkan logit masking sebelum dimuat ke PeftModel
+    # Apply logit masking before Peft
     apply_logit_mask(base_model, ALL_SUPPRESS_IDS)
         
-    if os.path.exists(ADAPTER_PATH):
-        print(f"Loading LoRA adapter from {ADAPTER_PATH}...")
-        model = PeftModel.from_pretrained(base_model, ADAPTER_PATH)
+    if adapter_name_or_path and adapter_name_or_path.strip().lower() != "none":
+        assert adapter_path is not None
+        print(f"Loading LoRA adapter from {adapter_path}...")
+        try:
+            model = PeftModel.from_pretrained(base_model, adapter_path)
+        except Exception as e:
+            print(f"Failed to load adapter directly from {adapter_path}: {e}. Trying fallback...")
+            # If adapter_path is local snapshot and loading failed, try loading from original path with subfolder
+            try:
+                model = PeftModel.from_pretrained(base_model, adapter_name_or_path, subfolder="final_adapter")
+            except Exception as e2:
+                print(f"Failed to load adapter with subfolder final_adapter: {e2}. Trying checkpoint fallback...")
+                try:
+                    if "exp" in adapter_name_or_path:
+                        model = PeftModel.from_pretrained(base_model, adapter_name_or_path, subfolder="checkpoint-1225")
+                    else:
+                        model = PeftModel.from_pretrained(base_model, adapter_name_or_path, subfolder="checkpoint-1000")
+                except Exception as e3:
+                    raise e3
     else:
-        print(f"[WARN] LoRA adapter not found at {ADAPTER_PATH}. Falling back to base model.")
+        print("No LoRA adapter specified. Using base model directly.")
         model = base_model
         
     model.eval()
-    print("✅ Model initialization complete!")
+    current_base_model = base_model_name
+    current_adapter = adapter_name_or_path
+    print(f"✅ Loaded base={base_model_name}, adapter={adapter_name_or_path} successfully!")
+    return True
+
+def init_model():
+    try:
+        print("Attempting to load default 1B model + v4-exp adapter...")
+        load_model_and_tokenizer(DEFAULT_BASE_MODEL, DEFAULT_ADAPTER)
+    except Exception as e:
+        print(f"Failed to load 1B model: {e}. Falling back to 270m base model.")
+        try:
+            load_model_and_tokenizer("google/t5gemma-2-270m-270m", None)
+        except Exception as e2:
+            print(f"Critical error loading fallback model: {e2}")
 
 def format_chat_prompt(messages):
     formatted = ""
@@ -176,6 +277,38 @@ def get_samples():
             
     return jsonify(samples)
 
+@app.route("/api/model_status", methods=["GET"])
+def api_model_status():
+    global current_base_model, current_adapter
+    return jsonify({
+        "base_model": current_base_model,
+        "adapter": current_adapter,
+        "device": device,
+        "gpu_memory": f"{torch.cuda.memory_allocated() / 1024**3:.2f} GB" if torch.cuda.is_available() else "N/A"
+    })
+
+@app.route("/api/load_model", methods=["POST"])
+def api_load_model():
+    data = request.json or {}
+    base_model = data.get("base_model", DEFAULT_BASE_MODEL)
+    adapter = data.get("adapter", DEFAULT_ADAPTER)
+    
+    try:
+        load_model_and_tokenizer(base_model, adapter)
+        return jsonify({
+            "status": "success",
+            "base_model": current_base_model,
+            "adapter": current_adapter,
+            "message": f"Successfully loaded base={base_model} and adapter={adapter}"
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     global tokenizer, model
@@ -187,6 +320,10 @@ def chat():
     if not messages:
         return jsonify({"error": "No messages provided"}), 400
         
+    temperature = float(data.get("temperature", 0.7))
+    repetition_penalty = float(data.get("repetition_penalty", 1.0))
+    do_sample = data.get("do_sample", temperature > 0.0)
+    
     prompt = format_chat_prompt(messages)
     
     inputs = tokenizer(
@@ -202,12 +339,22 @@ def chat():
     stop_eos = tokenizer.eos_token_id or 1
     stop_ids = list({stop_eot, stop_eos})
     
+    gen_kwargs = {
+        "max_new_tokens": 256,
+        "repetition_penalty": repetition_penalty,
+        "eos_token_id": stop_ids,
+        "do_sample": do_sample
+    }
+    
+    if do_sample:
+        gen_kwargs["temperature"] = temperature
+        gen_kwargs["top_p"] = 0.9
+        gen_kwargs["top_k"] = 50
+    
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=256,
-            do_sample=False,
-            eos_token_id=stop_ids
+            **gen_kwargs
         )
         
     raw_response = tokenizer.decode(outputs[0], skip_special_tokens=True)

@@ -5,10 +5,12 @@
 #     "bitsandbytes==0.49.2",
 #     "datasets==5.0.0",
 #     "evaluate==0.4.6",
+#     "galore-torch==1.0",
 #     "huggingface-hub==1.18.0",
 #     "kernel==0.65.0",
 #     "numpy==2.4.6",
 #     "peft==0.19.1",
+#     "pytorch-optimizer==3.10.1",
 #     "rouge-score==0.1.2",
 #     "torch==2.12.0",
 #     "transformers==5.11.0",
@@ -43,6 +45,80 @@ def _(mo):
     - Mengevaluasi performa model menggunakan metrik `eval_loss` serta pengujian generasi respon secara kualitatif pada sampel validasi secara berkala.
     """)
     return
+
+
+@app.cell
+def _():
+    import os
+    import re
+    import torch
+    import random
+    import datetime
+    import matplotlib.pyplot as plt
+    from datasets import Dataset, load_dataset
+    from transformers import (
+        AutoTokenizer,
+        AutoModelForSeq2SeqLM,
+        Seq2SeqTrainer,
+        Seq2SeqTrainingArguments,
+        DataCollatorForSeq2Seq,
+        PreTrainedTokenizerFast,
+        TrainerCallback,
+        TrainerControl,
+        TrainerState,
+        TrainingArguments,
+        EarlyStoppingCallback,
+        get_scheduler,
+    )
+    from peft import LoraConfig, get_peft_model, TaskType
+    from typing import cast, Any
+
+    # Gunakan inline backend untuk matplotlib di Jupyter Notebook
+    # '%matplotlib inline' command supported automatically in marimo
+    import numpy as np
+
+    # Optional imports for ROUGE & BLEU evaluation
+    try:
+        import evaluate
+
+        rouge_metric = evaluate.load("rouge")
+        bleu_metric = evaluate.load("bleu")
+    except Exception as e:
+        print(
+            f"Warning: evaluate, rouge_score or bleu not available. Metric evaluation will be bypassed. Error: {e}"
+        )
+        rouge_metric = None
+        bleu_metric = None
+    return (
+        Any,
+        AutoModelForSeq2SeqLM,
+        AutoTokenizer,
+        DataCollatorForSeq2Seq,
+        Dataset,
+        EarlyStoppingCallback,
+        LoraConfig,
+        PreTrainedTokenizerFast,
+        Seq2SeqTrainer,
+        Seq2SeqTrainingArguments,
+        TaskType,
+        TrainerCallback,
+        TrainerControl,
+        TrainerState,
+        TrainingArguments,
+        bleu_metric,
+        cast,
+        datetime,
+        get_peft_model,
+        get_scheduler,
+        load_dataset,
+        np,
+        os,
+        plt,
+        random,
+        re,
+        rouge_metric,
+        torch,
+    )
 
 
 @app.cell
@@ -87,78 +163,6 @@ def _():
     # Install library yang diperlukan (uncomment jika dijalankan di Google Colab atau environment baru)
     # !pip install -q transformers datasets peft accelerate matplotlib ipywidgets -U
     return
-
-
-@app.cell
-def _():
-    import os
-    import re
-    import torch
-    import random
-    import datetime
-    import matplotlib.pyplot as plt
-    from datasets import Dataset, load_dataset
-    from transformers import (
-        AutoTokenizer,
-        AutoModelForSeq2SeqLM,
-        Seq2SeqTrainer,
-        Seq2SeqTrainingArguments,
-        DataCollatorForSeq2Seq,
-        PreTrainedTokenizerFast,
-        TrainerCallback,
-        TrainerControl,
-        TrainerState,
-        TrainingArguments,
-        EarlyStoppingCallback,
-    )
-    from peft import LoraConfig, get_peft_model, TaskType
-    from typing import cast, Any
-
-    # Gunakan inline backend untuk matplotlib di Jupyter Notebook
-    # '%matplotlib inline' command supported automatically in marimo
-    import numpy as np
-
-    # Optional imports for ROUGE & BLEU evaluation
-    try:
-        import evaluate
-
-        rouge_metric = evaluate.load("rouge")
-        bleu_metric = evaluate.load("bleu")
-    except Exception as e:
-        print(
-            f"Warning: evaluate, rouge_score or bleu not available. Metric evaluation will be bypassed. Error: {e}"
-        )
-        rouge_metric = None
-        bleu_metric = None
-    return (
-        Any,
-        AutoModelForSeq2SeqLM,
-        AutoTokenizer,
-        DataCollatorForSeq2Seq,
-        Dataset,
-        EarlyStoppingCallback,
-        LoraConfig,
-        PreTrainedTokenizerFast,
-        Seq2SeqTrainer,
-        Seq2SeqTrainingArguments,
-        TaskType,
-        TrainerCallback,
-        TrainerControl,
-        TrainerState,
-        TrainingArguments,
-        bleu_metric,
-        cast,
-        datetime,
-        get_peft_model,
-        load_dataset,
-        np,
-        os,
-        plt,
-        random,
-        re,
-        rouge_metric,
-        torch,
-    )
 
 
 @app.cell
@@ -929,6 +933,98 @@ def _(
 
 
 @app.cell
+def _(torch):
+    class GrokAdEMAMix(torch.optim.Optimizer):
+        def __init__(
+            self,
+            params,
+            lr=3e-5,
+            betas=(0.9, 0.999),
+            beta3=0.9999,
+            weight_decay=0.05,
+            grok_alpha=2.0,
+            grok_lamb=0.98,
+        ):
+            defaults = dict(
+                lr=lr,
+                betas=betas,
+                beta3=beta3,
+                weight_decay=weight_decay,
+                grok_alpha=grok_alpha,
+                grok_lamb=grok_lamb,
+            )
+            super().__init__(params, defaults)
+            self.step_count = 0
+
+        @torch.no_grad()
+        def step(self, closure=None):
+            loss = None
+            if closure is not None:
+                with torch.enable_grad():
+                    loss = closure()
+
+            self.step_count += 1
+
+            for group in self.param_groups:
+                lr = group["lr"]
+                beta1, beta2 = group["betas"]
+                beta3 = group["beta3"]
+                weight_decay = group["weight_decay"]
+                grok_alpha = group["grok_alpha"]
+                grok_lamb = group["grok_lamb"]
+
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+
+                    grad = p.grad
+                    state = self.state[p]
+
+                    if len(state) == 0:
+                        state["step"] = 0
+                        state["grok_slow_grad"] = torch.zeros_like(grad)
+                        state["m"] = torch.zeros_like(grad)
+                        state["v"] = torch.zeros_like(grad)
+                        state["n"] = torch.zeros_like(grad)
+
+                    state["step"] += 1
+                    step = state["step"]
+
+                    # ─── GROKFAST ───
+                    state["grok_slow_grad"].mul_(grok_lamb).add_(
+                        grad, alpha=1.0 - grok_lamb
+                    )
+                    filtered_grad = grad.clone()
+                    filtered_grad.add_(state["grok_slow_grad"], alpha=grok_alpha)
+
+                    if weight_decay != 0:
+                        p.data.mul_(1.0 - lr * weight_decay)
+
+                    # ─── ADEMAMIX ───
+                    m, v, n = state["m"], state["v"], state["n"]
+
+                    m.mul_(beta1).add_(filtered_grad, alpha=1.0 - beta1)
+                    v.mul_(beta2).addcmul_(
+                        filtered_grad, filtered_grad, value=1.0 - beta2
+                    )
+                    n.mul_(beta3).add_(filtered_grad, alpha=1.0 - beta3)
+
+                    bias_correction1 = 1.0 - beta1**step
+                    bias_correction2 = 1.0 - beta2**step
+                    bias_correction3 = 1.0 - beta3**step
+
+                    denom = (v.sqrt() / (bias_correction2**0.5)).add_(1e-8)
+                    step_update = (
+                        m / bias_correction1 + 0.1 * n / bias_correction3
+                    ) / denom
+
+                    p.data.add_(step_update, alpha=-lr)
+            return loss
+
+    return (GrokAdEMAMix,)
+
+
+@app.cell
 def _(
     ALL_SUPPRESS_IDS,
     Any,
@@ -944,6 +1040,7 @@ def _(
     GEN_TOP_P,
     GRADIENT_ACCUMULATION_STEPS,
     GRADIENT_CHECKPOINTING,
+    GrokAdEMAMix,
     LABEL_SMOOTHING_FACTOR,
     LEARNING_RATE,
     LOGGING_STEPS,
@@ -968,6 +1065,7 @@ def _(
     cast,
     eval_ds,
     eval_generation_samples,
+    get_scheduler,
     model,
     np,
     os,
@@ -1130,7 +1228,9 @@ def _(
             logits = logits[0]
         return logits.argmax(dim=-1)
 
-    bad_words_ids = [[id_] for id_ in ALL_SUPPRESS_IDS if id_ < model.config.vocab_size]
+    bad_words_ids = [
+        [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, model).config.vocab_size
+    ]
 
     plot_callback = TrainingPlotCallback(output_dir=OUTPUT_DIR)
     sample_callback = SampleGenerationCallback(
@@ -1178,6 +1278,28 @@ def _(
         generation_max_length=MAX_TARGET_LENGTH,
     )
 
+    # Inisialisasi GrokAdEMAMix custom optimizer
+    optimizer = GrokAdEMAMix(
+        model.parameters(),
+        lr=LEARNING_RATE,
+        weight_decay=WEIGHT_DECAY,
+        grok_alpha=2.0,
+        grok_lamb=0.98,
+    )
+
+    # Hitung total training steps secara manual untuk scheduler
+    num_update_steps_per_epoch = max(
+        1, len(train_ds) // (PER_DEVICE_TRAIN_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS)
+    )
+    max_steps = num_update_steps_per_epoch * NUM_EPOCHS
+
+    lr_scheduler = get_scheduler(
+        name=LR_SCHEDULER_TYPE,
+        optimizer=optimizer,
+        num_warmup_steps=WARMUP_STEPS,
+        num_training_steps=max_steps,
+    )
+
     # Gunakan Custom Trainer di sini
     trainer = CustomSeq2SeqTrainer(
         model=model,
@@ -1189,6 +1311,7 @@ def _(
         preprocess_logits_for_metrics=None
         if PREDICT_WITH_GENERATE
         else preprocess_logits_for_metrics,
+        optimizers=(optimizer, lr_scheduler),
         callbacks=[
             plot_callback,
             sample_callback,
@@ -1204,6 +1327,7 @@ def _(
 @app.cell
 def _(OUTPUT_DIR, os, tokenizer, trainer):
     # Save
+
     final_path = os.path.join(OUTPUT_DIR, "final_adapter")
     print(f"\nSaving final SFT adapter to {final_path}...")
     trainer.save_model(final_path)
@@ -1217,7 +1341,7 @@ def _(OUTPUT_DIR):
     from huggingface_hub import HfApi
 
     # GANTI dengan nama repository tujuan Anda di Hugging Face Hub
-    REPO_NAME = "daruokta/t5gemma-2-1b-1b-instruct-chat-indo-v2"
+    REPO_NAME = "daruokta/t5gemma-2-1b-1b-instruct-chat-indo-v2-exp"
 
     print(f"Memulai proses unggah seluruh folder {OUTPUT_DIR} ke Hugging Face Hub: {REPO_NAME}...")
     try:

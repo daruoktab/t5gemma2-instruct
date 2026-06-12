@@ -761,8 +761,13 @@ def _(
                     inp_f = format_encoder_from_raw(turn["input"])
                     tgt_f = turn["target"].strip() + "<end_of_turn>"
 
-                    inp_ids = tokenizer.encode(inp_f, add_special_tokens=False)
+                    inp_ids = tokenizer.encode(inp_f, add_special_tokens=True)
+                    if getattr(tokenizer, "eos_token_id", None) is not None and inp_ids[-1] != tokenizer.eos_token_id:
+                        inp_ids.append(tokenizer.eos_token_id)
+
                     tgt_ids = tokenizer.encode(tgt_f, add_special_tokens=False)
+                    if getattr(tokenizer, "eos_token_id", None) is not None and tgt_ids[-1] != tokenizer.eos_token_id:
+                        tgt_ids.append(tokenizer.eos_token_id)
 
                     if (
                         len(inp_ids) <= MAX_SOURCE_LENGTH
@@ -776,8 +781,13 @@ def _(
                 inp_f = format_encoder_from_raw(obj.get("input", ""))
                 tgt_f = obj.get("target", "").strip() + "<end_of_turn>"
 
-                inp_ids = tokenizer.encode(inp_f, add_special_tokens=False)
+                inp_ids = tokenizer.encode(inp_f, add_special_tokens=True)
+                if getattr(tokenizer, "eos_token_id", None) is not None and inp_ids[-1] != tokenizer.eos_token_id:
+                    inp_ids.append(tokenizer.eos_token_id)
+
                 tgt_ids = tokenizer.encode(tgt_f, add_special_tokens=False)
+                if getattr(tokenizer, "eos_token_id", None) is not None and tgt_ids[-1] != tokenizer.eos_token_id:
+                    tgt_ids.append(tokenizer.eos_token_id)
 
                 if (
                     len(inp_ids) <= MAX_SOURCE_LENGTH
@@ -1305,9 +1315,6 @@ def _(OUTPUT_DIR, mo, os, re):
     # Tombol refresh manual
     refresh_button = mo.ui.button(label="🔄 Refresh Data Evaluasi", value=0)
 
-    # Ambil data evaluasi
-    evaluation_runs = parse_log_file(log_file_path)
-
     # Definisikan stylesheet CSS khusus
     css_style = mo.Html("""
     <style>
@@ -1391,12 +1398,19 @@ def _(OUTPUT_DIR, mo, os, re):
     }
     </style>
     """)
+    return css_style, log_file_path, parse_log_file, refresh_button
 
-    # Render antarmuka utama
+
+@app.cell
+def _(log_file_path, mo, parse_log_file, refresh_button):
+    # React to manual refresh clicks
+    _ = refresh_button.value
+
+    # Ambil data evaluasi terbaru
+    evaluation_runs = parse_log_file(log_file_path)
+
     if not evaluation_runs:
-        output = mo.md(
-            f"⚠️ *Belum ada data evaluasi ditemukan di `{log_file_path}`. Silakan jalankan training terlebih dahulu.*"
-        )
+        step_dropdown = None
     else:
         # Pilihan dropdown untuk memilih Step/Waktu Run
         run_options = {run["label"]: idx for idx, run in enumerate(evaluation_runs)}
@@ -1406,53 +1420,62 @@ def _(OUTPUT_DIR, mo, os, re):
             label="Pilih Step Evaluasi:",
             full_width=True,
         )
+    return evaluation_runs, step_dropdown
 
+
+@app.cell
+def _(css_style, evaluation_runs, log_file_path, mo, refresh_button, step_dropdown):
+    if not evaluation_runs or step_dropdown is None:
+        _output = mo.md(
+            f"⚠️ *Belum ada data evaluasi ditemukan di `{log_file_path}`. Silakan jalankan training terlebih dahulu.*"
+        )
+    else:
         # Ambil sampel berdasarkan pilihan dropdown
-        selected_idx = step_dropdown.value
-        selected_run = evaluation_runs[selected_idx]
+        _selected_idx = step_dropdown.value
+        _selected_run = evaluation_runs[_selected_idx]
 
-        # Buat visualisasi kartu untuk 10 sampel
-        cards_html = []
-        for idx, s in enumerate(selected_run["samples"]):
-            card = f"""
+        # Buat visualisasi kartu untuk sampel
+        _cards_html = []
+        for _idx, _s in enumerate(_selected_run["samples"]):
+            _card = f"""
             <div class="sample-card">
                 <div class="sample-header">
-                    <span class="sample-num">Sampel #{idx + 1}</span>
-                    <span class="sample-badge {s["flag_class"]}">{s["flag"]}</span>
+                    <span class="sample-num">Sampel #{_idx + 1}</span>
+                    <span class="sample-badge {_s["flag_class"]}">{_s["flag"]}</span>
                 </div>
                 <div class="sample-body">
                     <div class="section-title">💬 User Prompt</div>
-                    <pre class="text-block prompt-block">{s["query"]}</pre>
+                    <pre class="text-block prompt-block">{_s["query"]}</pre>
 
                     <div class="section-title">🎯 Expected Target</div>
-                    <div class="text-block target-block">{s["target"]}</div>
+                    <div class="text-block target-block">{_s["target"]}</div>
 
                     <div class="section-title">🤖 Model Response</div>
-                    <div class="text-block response-block">{s["response"]}</div>
+                    <div class="text-block response-block">{_s["response"]}</div>
                 </div>
             </div>
             """
-            cards_html.append(card)
+            _cards_html.append(_card)
 
         # Gabungkan semua kartu ke dalam container
-        container_html = f"""
+        _container_html = f"""
         {css_style.text}
         <div class="sample-container">
-            {"".join(cards_html)}
+            {"".join(_cards_html)}
         </div>
         """
 
-        output = mo.vstack(
+        _output = mo.vstack(
             [
                 mo.md(
-                    f"Menampilkan **{len(selected_run['samples'])} sampel** untuk **{selected_run['label']}**."
+                    f"Menampilkan **{len(_selected_run['samples'])} sampel** untuk **{_selected_run['label']}**."
                 ),
                 step_dropdown,
-                mo.Html(container_html),
+                mo.Html(_container_html),
             ]
         )
 
-    mo.vstack([refresh_button, mo.hstack([output], justify="start")])
+    mo.vstack([refresh_button, mo.hstack([_output], justify="start")])
     return
 
 
