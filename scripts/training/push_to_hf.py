@@ -30,6 +30,7 @@ def push_model():
 
     print(f"Loading tokenizer dari: {ADAPTER_PATH}...")
     tokenizer = AutoTokenizer.from_pretrained(ADAPTER_PATH)
+    assert tokenizer is not None
 
     print(f"Mulai push merged model & tokenizer ke Hugging Face: {REPO_NAME}...")
 

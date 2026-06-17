@@ -205,6 +205,8 @@ def main():
                         response_format={"type": "json_object"}
                     )
                     text = completion.choices[0].message.content
+                    if text is None:
+                        raise ValueError("Message content is None")
                     data = parse_json_loose(text)
                     
                     # Tulis ke file output secara real-time

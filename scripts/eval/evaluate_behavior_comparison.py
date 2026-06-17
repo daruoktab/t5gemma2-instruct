@@ -64,6 +64,7 @@ def main():
 
     # 1. Load Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(SFT_ADAPTER_DIR)
+    assert tokenizer is not None
 
     # 2. Load Base Model
     print("\n[1/2] Loading Base Model...")

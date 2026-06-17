@@ -20,6 +20,13 @@
 # In[1]:
 
 
+def get_ipython():
+    class _MockIPython:
+        def run_line_magic(self, *args, **kwargs):
+            pass
+    return _MockIPython()
+
+
 get_ipython().run_line_magic('uv', 'pip list')
 
 

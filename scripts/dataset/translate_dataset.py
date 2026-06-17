@@ -223,14 +223,15 @@ def main() -> None:
     print(f"\n{len(todo)} samples belum ditranslate, mulai...\n")
 
     # Cek tqdm
+    tqdm_class = None
     try:
-        from tqdm import tqdm
+        from tqdm import tqdm as _tqdm
+        tqdm_class = _tqdm
         use_tqdm = True
     except ImportError:
-        tqdm = None
         use_tqdm = False
 
-    iterator = tqdm(todo, desc="Translating", unit="sample") if (use_tqdm and tqdm is not None) else todo
+    iterator = tqdm_class(todo, desc="Translating", unit="sample") if (use_tqdm and tqdm_class is not None) else todo
 
     errors = 0
     t_start = time.time()

@@ -45,7 +45,7 @@ if _ROOT_DIR not in sys.path:
 from typing import Any, Literal, Optional
 
 try:
-    from pydantic import BaseModel, ConfigDict, Field, model_validator
+    from pydantic import BaseModel, Field, root_validator
 except ImportError:
     print("Install: pip install pydantic", file=sys.stderr)
     raise SystemExit(1) from None
@@ -59,7 +59,7 @@ try:
 except ImportError:
     pass
 
-from generate_dataset_deepseek import (  # noqa: E402
+from scripts.dataset.generate_dataset_deepseek import (  # noqa: E402
     DEEPSEEK_BASE_URL,
     MODEL_CHAT,
     SYSTEM_PROMPT,
@@ -73,19 +73,23 @@ FlawType = Literal["echo_user", "vague", "hallucination", "unsafe", "off_topic"]
 class PreferenceRecord(BaseModel):
     """Satu baris preferensi untuk JSONL."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    input: str = Field(min_length=20, max_length=120_000)
-    chosen: str = Field(min_length=5, max_length=16_000)
-    rejected: str = Field(min_length=5, max_length=16_000)
+    input: str = Field(..., min_length=20, max_length=120_000)
+    chosen: str = Field(..., min_length=5, max_length=16_000)
+    rejected: str = Field(..., min_length=5, max_length=16_000)
     flaw_type: FlawType
-    rationale: str = Field(default="", max_length=800)
+    rationale: str = Field("", max_length=800)
 
-    @model_validator(mode="after")
-    def chosen_differs_from_rejected(self) -> PreferenceRecord:
-        if self.chosen.strip() == self.rejected.strip():
-            raise ValueError("chosen dan rejected tidak boleh identik")
-        return self
+    class Config:
+        anystr_strip_whitespace = True
+
+    @root_validator(pre=False)
+    def chosen_differs_from_rejected(cls, values):
+        chosen = values.get("chosen")
+        rejected = values.get("rejected")
+        if chosen is not None and rejected is not None:
+            if chosen.strip() == rejected.strip():
+                raise ValueError("chosen dan rejected tidak boleh identik")
+        return values
 
 
 def build_preference_prompt(flaw: FlawType, rng: random.Random) -> str:
@@ -127,12 +131,24 @@ Keluarkan HANYA satu objek JSON valid dengan kunci:
 Tanpa markdown code fence."""
 
 
+def _validate_model(model_cls, data: dict[str, Any]):
+    if hasattr(model_cls, "model_validate"):
+        return getattr(model_cls, "model_validate")(data)
+    return getattr(model_cls, "parse_obj")(data)
+
+
+def _dump_model(model_inst) -> dict[str, Any]:
+    if hasattr(model_inst, "model_dump"):
+        return getattr(model_inst, "model_dump")()
+    return getattr(model_inst, "dict")()
+
+
 def validate_record(data: dict[str, Any]) -> tuple[PreferenceRecord | None, str]:
     try:
         flaw = data.get("flaw_type")
         if flaw not in ("echo_user", "vague", "hallucination", "unsafe", "off_topic"):
             return None, f"flaw_type tidak valid: {flaw!r}"
-        rec = PreferenceRecord.model_validate(data)
+        rec = _validate_model(PreferenceRecord, data)
         if rec.chosen.strip() == rec.rejected.strip():
             return None, "chosen == rejected"
         if "system:" not in rec.input.lower():
@@ -203,7 +219,7 @@ def main() -> None:
                 print(f"  [skip] validasi: {reason}")
                 time.sleep(args.sleep)
                 continue
-            line = rec.model_dump()
+            line = _dump_model(rec)
             with args.output.open("a", encoding="utf-8") as out:
                 out.write(json.dumps(line, ensure_ascii=False) + "\n")
             produced += 1

@@ -34,7 +34,7 @@ if ROOT_DIR not in sys.path:
 
 def default_system_prompt() -> str:
     try:
-        from generate_dataset_deepseek import SYSTEM_PROMPT
+        from scripts.dataset.generate_dataset_deepseek import SYSTEM_PROMPT
 
         return SYSTEM_PROMPT.strip()
     except Exception:

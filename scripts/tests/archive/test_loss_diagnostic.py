@@ -3,6 +3,7 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from transformers import DataCollatorForSeq2Seq
 
 tokenizer = AutoTokenizer.from_pretrained('models/t5gemma2-270m-task-vector')
+assert tokenizer is not None
 model = AutoModelForSeq2SeqLM.from_pretrained('models/t5gemma2-270m-task-vector', trust_remote_code=True, torch_dtype=torch.bfloat16).cuda()
 
 if getattr(model.config, "decoder_start_token_id", None) is None:

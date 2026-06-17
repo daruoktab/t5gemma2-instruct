@@ -60,7 +60,7 @@ except ImportError:
     raise
 
 try:
-    from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+    from pydantic import BaseModel, Field, root_validator
 except ImportError as exc:
     print("Install: pip install pydantic", file=sys.stderr)
     raise SystemExit(1) from exc
@@ -119,28 +119,37 @@ MAX_BODY_TURNS = MAX_MESSAGES_TOTAL - 1
 class TopicGenResponse(BaseModel):
     """Satu objek JSON dari tahap generate topik."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    topik: str = Field(..., min_length=2, max_length=240)
+    ringkasan: str = Field(..., min_length=5, max_length=1200)
 
-    topik: str = Field(min_length=2, max_length=240)
-    ringkasan: str = Field(
-        min_length=5,
-        max_length=1200,
-        validation_alias=AliasChoices("ringkasan", "summary"),
-    )
+    class Config:
+        anystr_strip_whitespace = True
+
+    @root_validator(pre=True)
+    def map_summary_to_ringkasan(cls, values):
+        if isinstance(values, dict):
+            if "summary" in values and "ringkasan" not in values:
+                values["ringkasan"] = values["summary"]
+        return values
 
 
 class DialogueTurn(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1)
+    content: str = Field(..., min_length=1)
+
+    class Config:
+        anystr_strip_whitespace = True
 
 
 class ConversationGenBody(BaseModel):
     conversations: list[DialogueTurn] = Field(
+        ...,
         min_length=MIN_BODY_TURNS,
         max_length=MAX_BODY_TURNS,
     )
+
+    class Config:
+        anystr_strip_whitespace = True
 
 
 def normalize_topic(s: str) -> str:
@@ -306,14 +315,26 @@ def parse_topic_payload(text: str) -> dict[str, Any]:
         raise e
 
 
+def _validate_model(model_cls, data: dict[str, Any]):
+    if hasattr(model_cls, "model_validate"):
+        return getattr(model_cls, "model_validate")(data)
+    return getattr(model_cls, "parse_obj")(data)
+
+
+def _dump_model(model_inst) -> dict[str, Any]:
+    if hasattr(model_inst, "model_dump"):
+        return getattr(model_inst, "model_dump")()
+    return getattr(model_inst, "dict")()
+
+
 def parse_topic_strings(data: dict[str, Any]) -> tuple[str, str]:
-    t = TopicGenResponse.model_validate(data)
+    t = _validate_model(TopicGenResponse, data)
     return t.topik.strip(), t.ringkasan.strip()
 
 
 def parse_conversation_turns(data: dict[str, Any]) -> list[dict[str, Any]]:
-    body = ConversationGenBody.model_validate(data)
-    return [turn.model_dump() for turn in body.conversations]
+    body = _validate_model(ConversationGenBody, data)
+    return [_dump_model(turn) for turn in body.conversations]
 
 
 def call_deepseek_raw(
