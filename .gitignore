@@ -19,3 +19,5 @@ skills-lock.json
 
 # Ignore Smart Environment folder
 .smart-env
+/outputs/
+/unsloth_compiled_cache/

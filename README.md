@@ -133,6 +133,30 @@ Proyek ini dilengkapi dengan aplikasi simulasi chat berbasis web (Flask) untuk m
 
 ---
 
+## 🦥 Integrasi Unsloth (Patch Seq2Seq / T5-Gemma-2)
+
+Untuk mempercepat proses pelatihan model **T5-Gemma-2** tanpa kendala memori (VRAM), proyek ini mendukung integrasi dengan **Unsloth** versi terbaru yang telah di-patch secara khusus untuk mendukung arsitektur *Encoder-Decoder* (Seq2Seq).
+
+### Mengapa Membutuhkan Patch Kustom?
+Unsloth secara default hanya mendukung arsitektur *Decoder-only* (seperti Llama, Mistral, Gemma 2 CausalLM). Jika langsung digunakan untuk Seq2Seq, model akan gagal dimuat atau mengalami crash *shape mismatch* karena panjang token input dan label yang berbeda. Patch kustom kami membenahi:
+1. **Routing Model**: Mengarahkan pemuatan ke `AutoModelForSeq2SeqLM`.
+2. **Task Type Mapping**: Memetakan LoRA ke `TaskType.SEQ_2_SEQ_LM`.
+3. **Bypass Batch Sampler**: Melewati pemeriksaan dimensi *causal* yang kaku ketika mendeteksi arsitektur encoder-decoder.
+
+### Cara Instalasi Unsloth Patched:
+Kami telah menyediakan *fork* repositori Unsloth yang sudah ter-patch di GitHub: [daruoktab/unsloth](https://github.com/daruoktab/unsloth). Instal menggunakan perintah berikut pada environment Anda:
+```powershell
+uv pip install --force-reinstall --no-deps git+https://github.com/daruoktab/unsloth.git
+```
+
+### Jalankan Pelatihan Pengujian (Test Training Script):
+Gunakan skrip pengujian berikut untuk memastikan modul terinstal dan berjalan dengan benar:
+```powershell
+python scratch/test_unsloth_training.py
+```
+
+---
+
 ## 📂 Struktur Direktori Proyek
 
 ```directory
