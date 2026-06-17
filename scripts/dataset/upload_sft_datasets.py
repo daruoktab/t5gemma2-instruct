@@ -23,6 +23,10 @@ def load_jsonl_samples(file_path):
                         item['chat_idx'] = row['chat_idx']
                     if 'turn_idx' in row:
                         item['turn_idx'] = row['turn_idx']
+                    if 'input_tokens' in row:
+                        item['input_tokens'] = row['input_tokens']
+                    if 'target_tokens' in row:
+                        item['target_tokens'] = row['target_tokens']
                     formatted_data.append(item)
             except Exception as e:
                 print(f"Error parsing line in {file_path}: {e}")
