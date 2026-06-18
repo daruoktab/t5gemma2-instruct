@@ -14,6 +14,8 @@
 #     "sacrebleu",
 #     "torch",
 #     "transformers==5.12.1",
+#     "unsloth_zoo @ git+https://github.com/daruoktab/unsloth-zoo.git",
+#     "unsloth @ git+https://github.com/daruoktab/unsloth.git",
 # ]
 # ///
 
@@ -37,14 +39,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Multi-task SFT Training: T5Gemma-2 Cloud Pipeline (Version 5)
+    # Multi-task SFT Training: T5Gemma-2 Cloud Pipeline (Version 5 - Unsloth)
     =====================================================================
-    Notebook ini melatih model **T5Gemma-2 4B-4B** (atau varian lain) menggunakan **Supervised Fine-Tuning (SFT)** dengan LoRA.
+    Notebook ini melatih model **T5Gemma-2 4B-4B** (atau varian lain) menggunakan **Supervised Fine-Tuning (SFT)** dengan LoRA berbasis **Unsloth** (2x lebih cepat, hemat memori).
     - Dataset dimuat langsung dari Hugging Face Hub (split `train` dan `validation`).
     - Menggunakan logit masking untuk menekan unused & vision tokens secara dinamis.
-    - Mendukung pelatihan QLoRA (4-bit) untuk penghematan memori GPU.
-    - Menyediakan alur penggabungan (*merge*) adapter LoRA ke base model secara langsung di presisi tinggi (`bfloat16`).
-    - Menyediakan petunjuk kuantisasi 4-bit NF4 untuk deployment/inferensi hemat memori di GPU lokal (6 GB VRAM).
+    - Mendukung akselerasi pelatihan QLoRA (4-bit) dan LoRA (16-bit) via **Unsloth**.
+    - Menyediakan alur penggabungan (*merge*) adapter LoRA ke base model secara langsung di presisi tinggi (`bfloat16`) atau kuantisasi 4-bit hemat memori menggunakan fitur bawaan Unsloth.
     """)
     return
 
@@ -56,11 +57,11 @@ def _():
     import torch
     import random
     import datetime
+    import gc
     import matplotlib.pyplot as plt
     from datasets import Dataset, load_dataset
     from transformers import (
         AutoTokenizer,
-        AutoModelForSeq2SeqLM,
         Seq2SeqTrainer,
         Seq2SeqTrainingArguments,
         DataCollatorForSeq2Seq,
@@ -69,14 +70,12 @@ def _():
         TrainerControl,
         TrainerState,
         TrainingArguments,
-        EarlyStoppingCallback,
         get_scheduler,
     )
-    from peft import LoraConfig, get_peft_model, TaskType
+    from unsloth import FastLanguageModel
     from typing import cast, Any
 
     # Gunakan inline backend untuk matplotlib di Jupyter Notebook
-    # '%matplotlib inline' command supported automatically in marimo
     import numpy as np
 
     # Optional imports for ROUGE & BLEU evaluation
@@ -93,24 +92,21 @@ def _():
         bleu_metric = None
     return (
         Any,
-        AutoModelForSeq2SeqLM,
         AutoTokenizer,
         DataCollatorForSeq2Seq,
         Dataset,
-        EarlyStoppingCallback,
-        LoraConfig,
         PreTrainedTokenizerFast,
         Seq2SeqTrainer,
         Seq2SeqTrainingArguments,
-        TaskType,
         TrainerCallback,
         TrainerControl,
         TrainerState,
         TrainingArguments,
+        FastLanguageModel,
         bleu_metric,
         cast,
         datetime,
-        get_peft_model,
+        gc,
         get_scheduler,
         load_dataset,
         np,
@@ -148,7 +144,6 @@ def _(hf_token_input, mo, os):
     try:
         # Set the environment variable so transformers/datasets can find it
         os.environ["HF_TOKEN"] = hf_token_input.value
-        # Removed write_permission to support newer huggingface_hub versions
         login(token=hf_token_input.value)
         status = mo.md(
             "✅ **Successfully authenticated with Hugging Face Hub!** You can now load gated models."
@@ -163,7 +158,7 @@ def _(hf_token_input, mo, os):
 @app.cell
 def _():
     # Install library yang diperlukan (uncomment jika dijalankan di Google Colab atau environment baru)
-    # !pip install -q transformers datasets peft accelerate matplotlib ipywidgets -U
+    # !pip install -q transformers datasets peft accelerate matplotlib ipywidgets unsloth_zoo unsloth -U
     return
 
 
@@ -403,7 +398,6 @@ def _(Any, torch):
         vocab_size = model.config.vocab_size
         suppress_list = [i for i in suppress_ids if i < vocab_size]
 
-        # Gunakan nilai negatif besar yang kompatibel dengan bfloat16 (-10000.0)
         mask = torch.zeros(vocab_size, dtype=torch.bfloat16)
         mask[suppress_list] = -10000.0
 
@@ -423,7 +417,6 @@ def _(Any, torch):
                 return outputs
             return outputs
 
-        # Cari lapisan proyeksi akhir (lm_head) untuk dipasangi hook
         target_module = None
         if hasattr(model, "lm_head"):
             target_module = model.lm_head
@@ -482,7 +475,6 @@ def _(
                 return
             if "loss" in logs:
                 self.train_steps.append(state.global_step)
-                # Tampilkan angka persis sesuai dengan yang dicetak di log (tanpa pembagian)
                 actual_loss = float(logs["loss"])
                 self.train_losses.append(actual_loss)
             if "eval_loss" in logs:
@@ -504,7 +496,6 @@ def _(
                 fig, ax1 = plt.subplots(figsize=(10, 4))
                 ax2 = None
 
-            # Plot Loss on ax1
             if self.train_losses:
                 ax1.plot(
                     self.train_steps,
@@ -542,11 +533,10 @@ def _(
 
             ax1.set_xlabel("Steps")
             ax1.set_ylabel("Loss")
-            ax1.set_title("Training & Evaluation Loss Curve")
+            ax1.set_title("Training & Evaluation Loss Curve Curve")
             ax1.grid(True, alpha=0.3)
             ax1.legend()
 
-            # Plot ROUGE-L on ax2
             if has_rouge and ax2 is not None:
                 ax2.plot(
                     self.eval_steps,
@@ -624,7 +614,11 @@ def _(
             if model is None:
                 return
 
-            model.eval()
+            from unsloth import FastLanguageModel
+            if hasattr(FastLanguageModel, "for_inference"):
+                FastLanguageModel.for_inference(model)
+            else:
+                model.eval()
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             lines = [
                 f"\n{'=' * 60}",
@@ -632,9 +626,7 @@ def _(
                 f"{'=' * 60}",
             ]
 
-            # LAKUKAN BATCH GENERATION DENGAN CASTING LONG SECARA KETAT
             with torch.no_grad():
-                # Memastikan input_ids bertipe torch.long sejak awal
                 input_ids_list = [
                     torch.tensor(s["input_ids"], dtype=torch.long)
                     for s in self.eval_samples
@@ -650,23 +642,21 @@ def _(
                 padded_inputs = []
                 attention_masks = []
                 for x in input_ids_list:
-                    pad_len = max_len - len(x)
-                    # Gunakan dtype=torch.long untuk padding & attention mask
-                    padded_inputs.append(
-                        torch.cat(
-                            [torch.tensor([pad_id] * pad_len, dtype=torch.long), x]
-                        )
-                    )
-                    attention_masks.append(
-                        torch.cat(
-                            [
-                                torch.zeros(pad_len, dtype=torch.long),
-                                torch.ones(len(x), dtype=torch.long),
-                            ]
-                        )
-                    )
+                     pad_len = max_len - len(x)
+                     padded_inputs.append(
+                         torch.cat(
+                             [torch.tensor([pad_id] * pad_len, dtype=torch.long), x]
+                         )
+                     )
+                     attention_masks.append(
+                         torch.cat(
+                             [
+                                 torch.zeros(pad_len, dtype=torch.long),
+                                 torch.ones(len(x), dtype=torch.long),
+                             ]
+                         )
+                     )
 
-                # Paksa tipe data Long (.long() atau dtype=torch.long) saat ditaruh di device GPU
                 batch_inputs = torch.stack(padded_inputs).to(
                     device=model.device, dtype=torch.long
                 )
@@ -674,7 +664,6 @@ def _(
                     device=model.device, dtype=torch.long
                 )
 
-                # Generate sekaligus dalam 1 batch forward pass!
                 outputs = getattr(model, "generate")(
                     input_ids=batch_inputs,
                     attention_mask=batch_masks,
@@ -689,7 +678,6 @@ def _(
                     bad_words_ids=self.bad_words_ids,
                 )
 
-                # Decode hasil batch
                 for idx, sample in enumerate(self.eval_samples):
                     raw_query = self.tokenizer.decode(
                         sample["input_ids"], skip_special_tokens=True
@@ -728,7 +716,11 @@ def _(
                     lines.append(f"Expected Target: {target}")
                     lines.append(f"Model Response: {response}{flag}")
 
-            model.train()
+            from unsloth import FastLanguageModel
+            if hasattr(FastLanguageModel, "for_training"):
+                FastLanguageModel.for_training(model)
+            else:
+                model.train()
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
 
@@ -764,7 +756,6 @@ def _(
                 chat_groups[chat_idx].append(obj)
 
             for chat_idx, turns in chat_groups.items():
-                # Sort turns by turn_idx to keep the sequence order
                 turns = sorted(turns, key=lambda x: x.get("turn_idx", 0))
 
                 for turn in turns:
@@ -785,7 +776,7 @@ def _(
                     ):
                         rows.append({"input_ids": inp_ids, "labels": tgt_ids})
                     else:
-                        break  # subsequent turns will definitely be longer, so we can stop processing this chat
+                        break
         else:
             for obj in samples:
                 inp_f = format_encoder_from_raw(obj.get("input", ""))
@@ -837,8 +828,6 @@ def _(
         "Tokenizer harus PreTrainedTokenizerFast"
     )
 
-    # Load datasets dari Hugging Face Hub (Split Train & Validation terpisah)
-    print("\nLoading training & validation datasets...")
     train_chat_samples = load_hf_samples(
         HF_REPO_ID, CHAT_CONFIG, "train", SAMPLE_TRAIN_CHAT
     )
@@ -872,7 +861,6 @@ def _(
     train_ds = Dataset.from_list(train_rows)
     eval_ds = Dataset.from_list(val_rows)
 
-    # Ambil sampel dari validation set untuk evaluasi teks generasi berkala
     n_eval_gen = min(len(val_rows), SAMPLE_EVAL_GENERATION)
     eval_generation_samples = val_rows[:n_eval_gen]
     print(
@@ -884,52 +872,37 @@ def _(
 @app.cell
 def _(
     ALL_SUPPRESS_IDS,
-    AutoModelForSeq2SeqLM,
+    FastLanguageModel,
     LORA_ALPHA,
     LORA_DROPOUT,
     LORA_RANK,
     LORA_TARGET_MODULES,
-    LoraConfig,
     MODEL_NAME,
+    MAX_SOURCE_LENGTH,
     LOAD_IN_4BIT,
-    TaskType,
     apply_logit_mask,
-    get_peft_model,
     tokenizer,
     torch,
+    gc,
 ):
-    from transformers import BitsAndBytesConfig
-    from peft import prepare_model_for_kbit_training
+    # Clean up old models to prevent OOM on re-runs in Marimo
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, torch.nn.Module):
+                obj.to("cpu")
+        except Exception:
+            pass
+    gc.collect()
+    torch.cuda.empty_cache()
 
-    # Load Model
-    # Triggering model load with new logit masking
-    print(f"\nLoading Model from {MODEL_NAME}...")
-    
-    if LOAD_IN_4BIT:
-        print("  Using 4-bit Quantization (QLoRA) config...")
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            llm_int8_skip_modules=['model.encoder.vision_tower', 'lm_head', 'embed_tokens']
-        )
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            MODEL_NAME,
-            trust_remote_code=True,
-            quantization_config=bnb_config,
-            device_map="auto"
-        )
-        # Prepare model for 4-bit training
-        model = prepare_model_for_kbit_training(model)
-    else:
-        print("  Using BF16 precision...")
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            MODEL_NAME,
-            trust_remote_code=True,
-            dtype=torch.bfloat16,
-            device_map="auto"
-        )
+    # Load Model using Unsloth
+    print(f"\nLoading Model from {MODEL_NAME} using Unsloth...")
+    model, tokenizer_unsloth = FastLanguageModel.from_pretrained(
+        model_name = MODEL_NAME,
+        max_seq_length = MAX_SOURCE_LENGTH,
+        load_in_4bit = LOAD_IN_4BIT,
+        trust_remote_code = True,
+    )
 
     # Reset max_length to silence warning about max_new_tokens taking precedence
     model.config.max_length = None
@@ -949,16 +922,31 @@ def _(
     print(f"\nApplying logit mask for {len(ALL_SUPPRESS_IDS)} tokens...")
     apply_logit_mask(model, ALL_SUPPRESS_IDS)
 
-    # LoRA Config
-    lora_config = LoraConfig(
-        task_type=TaskType.SEQ_2_SEQ_LM,
-        r=LORA_RANK,
-        lora_alpha=LORA_ALPHA,
-        target_modules=LORA_TARGET_MODULES,
-        lora_dropout=LORA_DROPOUT,
+    # LoRA Config using Unsloth
+    print("Applying LoRA using Unsloth...")
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r = LORA_RANK,
+        lora_alpha = LORA_ALPHA,
+        target_modules = LORA_TARGET_MODULES,
+        lora_dropout = LORA_DROPOUT,
+        bias = "none",
+        use_gradient_checkpointing = "unsloth",
+        random_state = 3407,
     )
-    model = get_peft_model(model, lora_config)
-    setattr(model.config, "use_cache", False)
+    
+    # Enable for training
+    getattr(FastLanguageModel, "for_training")(model)
+    model.config.use_cache = False
+    
+    # Safety wrapper to prevent TypeError in transformers' DataCollatorForSeq2Seq across different versions
+    if hasattr(model, "prepare_decoder_input_ids_from_labels"):
+        orig_fn = model.prepare_decoder_input_ids_from_labels
+        def compatible_prepare(labels=None, input_ids=None, *args, **kwargs):
+            target_tensor = labels if labels is not None else input_ids
+            return orig_fn(target_tensor, *args, **kwargs)
+        model.prepare_decoder_input_ids_from_labels = compatible_prepare
+
     model.print_trainable_parameters()
     return (model,)
 
@@ -1064,7 +1052,6 @@ def _(
     EARLY_STOPPING_PATIENCE,
     EVAL_ACCUMULATION_STEPS,
     EVAL_EVERY_N_STEPS,
-    EarlyStoppingCallback,
     FP16,
     GEN_REPETITION_PENALTY,
     GEN_TEMPERATURE,
@@ -1104,10 +1091,8 @@ def _(
     tokenizer,
     torch,
     train_ds,
+    gc,
 ):
-    # Callbacks - Updated to trigger run
-    import gc
-
     # 1. Bersihkan sisa memori sebelum memulai training baru
     gc.collect()
     torch.cuda.empty_cache()
@@ -1138,7 +1123,6 @@ def _(
             vocab_size = logits.size(-1)
             suppress_list = [i for i in self.suppress_ids if i < vocab_size]
 
-            # Buat mask penanda token valid (bukan suppressed)
             valid_mask = torch.ones(vocab_size, dtype=torch.bool, device=logits.device)
             valid_mask[suppress_list] = False
             num_valid_tokens = valid_mask.sum().item()
@@ -1153,7 +1137,6 @@ def _(
             active_logits = flat_logits[active_mask]
             active_labels = flat_labels[active_mask]
 
-            # Hitung log_softmax secara efisien hanya pada token aktif
             log_probs = torch.nn.functional.log_softmax(active_logits, dim=-1)
 
             # NLL Loss
@@ -1202,6 +1185,35 @@ def _(
 
             return (loss, outputs) if return_outputs else loss
 
+        def evaluate(
+            self,
+            eval_dataset = None,
+            ignore_keys = None,
+            metric_key_prefix = "eval",
+            **gen_kwargs,
+        ):
+            from unsloth import FastLanguageModel
+            if hasattr(FastLanguageModel, "for_inference"):
+                FastLanguageModel.for_inference(self.model)
+            else:
+                self.model.eval()
+
+            metrics = super().evaluate(
+                eval_dataset=eval_dataset,
+                ignore_keys=ignore_keys,
+                metric_key_prefix=metric_key_prefix,
+                **gen_kwargs,
+            )
+
+            if hasattr(FastLanguageModel, "for_training"):
+                FastLanguageModel.for_training(self.model)
+            else:
+                self.model.train()
+
+            gc.collect()
+            torch.cuda.empty_cache()
+            return metrics
+
     def compute_metrics(eval_preds):
         metrics = {}
         if rouge_metric is None and bleu_metric is None:
@@ -1211,7 +1223,6 @@ def _(
             preds = preds[0]
         tok = cast(PreTrainedTokenizerFast, tokenizer)
 
-        # Handle logits jika predict_with_generate=False secara tidak sengaja diaktifkan
         if preds.ndim == 3:
             preds = preds.argmax(axis=-1)
 
@@ -1251,10 +1262,6 @@ def _(
         return metrics
 
     def preprocess_logits_for_metrics(logits, labels):
-        """
-        Mengambil argmax langsung di GPU sebelum dikumpulkan ke RAM.
-        Mencegah penumpukan logits mentah sebesar Terabytes.
-        """
         if isinstance(logits, tuple):
             logits = logits[0]
         return logits.argmax(dim=-1)
@@ -1297,8 +1304,6 @@ def _(
         save_total_limit=SAVE_TOTAL_LIMIT,
         eval_strategy="steps",
         eval_steps=EVAL_EVERY_N_STEPS,
-        # load_best_model_at_end=True,
-        # metric_for_best_model="eval_loss",
         optim=OPTIM,
         label_smoothing_factor=LABEL_SMOOTHING_FACTOR,
         neftune_noise_alpha=NEFTUNE_NOISE_ALPHA,
@@ -1309,7 +1314,6 @@ def _(
         generation_max_length=MAX_TARGET_LENGTH,
     )
 
-    # Inisialisasi GrokAdEMAMix custom optimizer
     optimizer = GrokAdEMAMix(
         model.parameters(),
         lr=LEARNING_RATE,
@@ -1318,7 +1322,6 @@ def _(
         grok_lamb=0.98,
     )
 
-    # Hitung total training steps secara manual untuk scheduler
     num_update_steps_per_epoch = max(
         1, len(train_ds) // (PER_DEVICE_TRAIN_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS)
     )
@@ -1331,7 +1334,6 @@ def _(
         num_training_steps=max_steps,
     )
 
-    # Gunakan Custom Trainer di sini
     trainer = CustomSeq2SeqTrainer(
         model=model,
         args=training_args,
@@ -1346,19 +1348,16 @@ def _(
         callbacks=[
             plot_callback,
             sample_callback,
-            # EarlyStoppingCallback(early_stopping_patience=EARLY_STOPPING_PATIENCE),
         ],
     )
 
-    print("\nStarting Clean SFT on Cloud/Notebook...")
+    print("\nStarting Clean SFT on Cloud/Notebook (with Unsloth)...")
     trainer.train()
     return (trainer,)
 
 
 @app.cell
 def _(OUTPUT_DIR, os, tokenizer, trainer):
-    # Save
-
     final_path = os.path.join(OUTPUT_DIR, "final_adapter")
     print(f"\nSaving final SFT adapter to {final_path}...")
     trainer.save_model(final_path)
@@ -1368,75 +1367,29 @@ def _(OUTPUT_DIR, os, tokenizer, trainer):
 
 
 @app.cell
-def _(MODEL_NAME, OUTPUT_DIR, os, tokenizer):
-    # Merging LoRA Adapter to Base Model (BF16) & Quantizing to 4-bit NF4
-    def merge_and_quantize(model_name: str, adapter_path: str, upload_dir: str):
-        from transformers import AutoModelForSeq2SeqLM, BitsAndBytesConfig
-        from peft import PeftModel
-        import torch
-        import gc
-        
+def _(MODEL_NAME, OUTPUT_DIR, os, tokenizer, model):
+    # Merging LoRA Adapter to Base Model (BF16) & Quantizing to 4-bit NF4 using Unsloth
+    def merge_and_quantize(model, tokenizer, upload_dir: str):
         merged_bf16_path = os.path.join(upload_dir, "merged_bf16")
         quantized_4bit_path = os.path.join(upload_dir, "quantized_4bit")
 
-        # 1. Pemuatan base model dalam bfloat16 (full precision)
-        print("Pemuatan base model dalam presisi tinggi (BF16) untuk penggabungan...")
-        base_model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
-        
-        # 2. Pemuatan adapter LoRA
-        print(f"Pemuatan adapter LoRA dari {adapter_path}...")
-        peft_model = PeftModel.from_pretrained(base_model, adapter_path)
-        
-        # 3. Merging bobot
-        print("Memulai proses penggabungan bobot (Merging weights)...")
-        merged_model = peft_model.merge_and_unload()
-        
-        # 4. Simpan model gabungan utuh (BF16) ke hf_upload/merged_bf16
-        print(f"Menyimpan model hasil penggabungan (BF16) ke {merged_bf16_path}...")
-        merged_model.save_pretrained(merged_bf16_path)
-        tokenizer.save_pretrained(merged_bf16_path)
+        # 1. Save merged 16bit model
+        print("Merging LoRA adapter and saving model as BF16 using Unsloth...")
+        model.save_pretrained_merged(merged_bf16_path, tokenizer, save_method="merged_16bit")
         print("✅ Model BF16 berhasil disimpan.")
+
+        # 2. Save merged 4bit model
+        print("\nMerging LoRA adapter and saving model as 4-bit NF4 using Unsloth...")
+        model.save_pretrained_merged(quantized_4bit_path, tokenizer, save_method="merged_4bit")
+        print("✅ Model 4-bit NF4 berhasil disimpan!")
         
-        # Bersihkan memori agar tidak OOM saat melakukan kuantisasi berikutnya
-        del peft_model
-        del base_model
-        del merged_model
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-        # 5. Kuantisasi model hasil merging ke 4-bit (NF4)
-        print("\nMemuat ulang model hasil penggabungan dalam mode kuantisasi 4-bit (NF4)...")
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            llm_int8_skip_modules=['model.encoder.vision_tower', 'lm_head', 'embed_tokens']
-        )
-        quantized_model = AutoModelForSeq2SeqLM.from_pretrained(
-            merged_bf16_path,
-            quantization_config=bnb_config,
-            device_map="auto"
-        )
-        
-        # 6. Simpan model yang sudah terkuantisasi ke hf_upload/quantized_4bit
-        print(f"Menyimpan model terkuantisasi (4-bit) ke {quantized_4bit_path}...")
-        quantized_model.save_pretrained(quantized_4bit_path, safe_serialization=True)
-        tokenizer.save_pretrained(quantized_4bit_path)
-        print("✅ Proses kuantisasi dan penyimpanan model berhasil selesai!")
-        
-        return quantized_model
+        return None
 
     # Folder penampung kedua model untuk diunggah ke Hugging Face
     upload_dir = os.path.join(OUTPUT_DIR, "hf_upload")
     
     # Helper ini bisa dijalankan secara manual dengan mencopot tanda komentar di bawah ini:
-    # merge_and_quantize(MODEL_NAME, os.path.join(OUTPUT_DIR, "final_adapter"), upload_dir)
+    # merge_and_quantize(model, tokenizer, upload_dir)
     return merge_and_quantize, upload_dir
 
 
@@ -1455,7 +1408,7 @@ def _(mo):
         ```python
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
         
-        model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v2-exp"
+        model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v3-unsloth"
         
         # Pemuatan langsung model terkuantisasi dari subfolder
         tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="quantized_4bit")
@@ -1471,7 +1424,7 @@ def _(mo):
         import torch
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
         
-        model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v2-exp"
+        model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v3-unsloth"
         
         tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="merged_bf16")
         model = AutoModelForSeq2SeqLM.from_pretrained(
@@ -1491,7 +1444,7 @@ def _(upload_dir):
     from huggingface_hub import HfApi
 
     # GANTI dengan nama repository tujuan Anda di Hugging Face Hub
-    REPO_NAME = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v2-exp"
+    REPO_NAME = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v3-unsloth"
 
     print(f"Memulai proses unggah folder model {upload_dir} ke Hugging Face Hub: {REPO_NAME}...")
     try:
@@ -1532,16 +1485,12 @@ def _(OUTPUT_DIR, mo, os, re):
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Split berdasarkan separator baris '='
         blocks = re.split(r"={10,}", content)
         steps_data = []
 
-        # blocks[0] bisa jadi kosong atau header awal
-        # Pola log: [..., "Step X | YYYY-MM-DD HH:MM:SS", "Q: ... Expected Target: ... Model Response: ...", ...]
         i = 1
         while i < len(blocks):
             header = blocks[i].strip()
-            # Cari informasi Step dan Waktu
             step_match = re.search(r"Step\s+(\d+)\s*\|\s*([\d\-\s:]+)", header)
             if not step_match:
                 i += 1
@@ -1553,16 +1502,13 @@ def _(OUTPUT_DIR, mo, os, re):
 
             body = blocks[i + 1].strip() if i + 1 < len(blocks) else ""
 
-            # Parsing sampel individual
             samples = []
-            # Split berdasarkan "\nQ: "
             raw_samples = re.split(r"\n+Q:\s*", "\n" + body)
             for rs in raw_samples:
                 rs = rs.strip()
                 if not rs or not ("Expected Target:" in rs and "Model Response:" in rs):
                     continue
 
-                # Parse bagian target dan response
                 try:
                     q_part, rest = rs.split("Expected Target:", 1)
                     target_part, response_part = rest.split("Model Response:", 1)
@@ -1571,7 +1517,6 @@ def _(OUTPUT_DIR, mo, os, re):
                     target = target_part.strip()
                     response = response_part.strip()
 
-                    # Bersihkan flag repetitive/good dari respons
                     flag_text = "Good ✅"
                     flag_class = "badge-good"
                     if "⚠️ REPETITIVE" in response:
@@ -1597,7 +1542,6 @@ def _(OUTPUT_DIR, mo, os, re):
                 steps_data.append({"label": label, "samples": samples})
             i += 2
 
-        # Urutkan berdasarkan waktu/step (terbaru paling atas)
         return steps_data[::-1]
 
     # Tombol refresh manual
@@ -1691,16 +1635,13 @@ def _(OUTPUT_DIR, mo, os, re):
 
 @app.cell
 def _(log_file_path, mo, parse_log_file, refresh_button):
-    # React to manual refresh clicks
     _ = refresh_button.value
 
-    # Ambil data evaluasi terbaru
     evaluation_runs = parse_log_file(log_file_path)
 
     if not evaluation_runs:
         step_dropdown = None
     else:
-        # Pilihan dropdown untuk memilih Step/Waktu Run
         run_options = {run["label"]: idx for idx, run in enumerate(evaluation_runs)}
         step_dropdown = mo.ui.dropdown(
             options=run_options,
@@ -1718,11 +1659,9 @@ def _(css_style, evaluation_runs, log_file_path, mo, refresh_button, step_dropdo
             f"⚠️ *Belum ada data evaluasi ditemukan di `{log_file_path}`. Silakan jalankan training terlebih dahulu.*"
         )
     else:
-        # Ambil sampel berdasarkan pilihan dropdown
         _selected_idx = step_dropdown.value
         _selected_run = evaluation_runs[_selected_idx]
 
-        # Buat visualisasi kartu untuk sampel
         _cards_html = []
         for _idx, _s in enumerate(_selected_run["samples"]):
             _card = f"""
@@ -1734,10 +1673,10 @@ def _(css_style, evaluation_runs, log_file_path, mo, refresh_button, step_dropdo
                 <div class="sample-body">
                     <div class="section-title">💬 User Prompt</div>
                     <pre class="text-block prompt-block">{_s["query"]}</pre>
-
+ 
                     <div class="section-title">🎯 Expected Target</div>
                     <div class="text-block target-block">{_s["target"]}</div>
-
+ 
                     <div class="section-title">🤖 Model Response</div>
                     <div class="text-block response-block">{_s["response"]}</div>
                 </div>
@@ -1745,7 +1684,6 @@ def _(css_style, evaluation_runs, log_file_path, mo, refresh_button, step_dropdo
             """
             _cards_html.append(_card)
 
-        # Gabungkan semua kartu ke dalam container
         _container_html = f"""
         {css_style.text}
         <div class="sample-container">
