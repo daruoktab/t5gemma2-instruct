@@ -65,4 +65,33 @@ Dalam pengujian dengan parameter generasi bertipe *greedy* (`do_sample=False`), 
 Untuk mengatasi hal ini, saat melakukan inferensi dianjurkan untuk menggunakan parameter:
 *   `repetition_penalty=1.2` atau lebih tinggi.
 *   `no_repeat_ngram_size=3`.
-*   `do_sample=True` dengan `temperature=0.7`.
+*   `do_sample=True` with `temperature=0.7`.
+
+## 5. Pemrosesan Banyak Gambar (Multiple Images)
+Model Gemma 3 (dan T5Gemma-2) mendukung pemrosesan banyak gambar secara natif dalam satu prompt percakapan.
+
+### Cara Penggunaan:
+1. Setiap gambar yang dikirimkan harus diwakili oleh **satu token** `processor.boi_token` (`📷` / `\uf400`) di lokasi penempatan yang diinginkan di dalam teks prompt.
+2. Jumlah gambar yang dimasukkan ke dalam daftar `images` harus **sama persis** dengan jumlah token `boi_token` yang dideklarasikan di dalam teks prompt. Jika tidak sama, processor akan melempar error:
+   `ValueError: Prompt contained X image tokens but received Y images.`
+
+### Contoh Kode Implementasi:
+```python
+from PIL import Image
+from transformers import AutoProcessor
+
+processor = AutoProcessor.from_pretrained("google/t5gemma-2-4b-4b")
+
+# Load beberapa gambar
+img1 = Image.open("path/to/batik.png")
+img2 = Image.open("path/to/nasi-goreng.png")
+images = [img1, img2]
+
+# Konstruksi prompt dengan dua placeholder boi_token
+prompt = f"Ini halaman pertama: {processor.boi_token} dan ini halaman kedua: {processor.boi_token}. Tolong jelaskan."
+
+# Proses inputs
+inputs = processor(text=prompt, images=images, return_tensors="pt")
+# pixel_values akan menghasilkan shape: [2, 3, 896, 896]
+# input_ids akan memiliki panjang token visual ter-ekspansi sebesar 512 token (256 * 2) ditambah token teks.
+```
