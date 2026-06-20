@@ -16,20 +16,21 @@ Ternyata, Hugging Face **tidak mendefinisikan processor khusus** untuk model `t5
 Karena menggunakan `Gemma3Processor`, processor ini akan mencari token penanda awal gambar (*Beginning of Image* / `boi_token`) di dalam teks prompt untuk diselaraskan dengan input gambar yang diterima.
 
 Berdasarkan inspeksi terhadap tokenizer model:
-*   `boi_token` (*Beginning of Image*): **`<img>`** (Unicode points: `[60, 115, 116, 97, 114, 116, 95, 111, 102, 95, 105, 109, 97, 103, 101, 62]`)
-*   `eoi_token` (*End of Image*): **`<end_of_image>`** (Unicode points: `[60, 101, 110, 100, 95, 111, 102, 95, 105, 109, 97, 103, 101, 62]`)
+*   `boi_token` (*Beginning of Image*): **`📷`** (Unicode character: `\uf400`, ID: `255999`)
+*   `eoi_token` (*End of Image*): **`<end_of_image>`** (ID: `256000`)
+*   `image_token` (*Image Soft Token*): **`<image_soft_token>`** (ID: `256001`)
 
 ### Penting: Perilaku Pencarian Token
-Processor mendeteksi posisi gambar berdasarkan keberadaan token **`<img>`** di dalam prompt teks. 
-Jika kita menggunakan token placeholder lain (misalnya `<image>` atau `<img>`), processor akan gagal mencocokkannya dan menghasilkan error berikut:
+Processor mendeteksi posisi gambar berdasarkan keberadaan karakter **`\uf400`** (`📷`) di dalam prompt teks.
+Jika kita menggunakan string placeholder lain seperti `"<img>"`, `"<image>"`, atau `"<image_soft_token>"`, processor akan gagal mencocokkannya dan menghasilkan error:
 ```text
 ValueError: Prompt contained 0 image tokens but received 1 images.
 ```
 
-Oleh karena itu, setiap gambar yang di-input ke model harus ditandai dengan token `<img>` di dalam prompt teks.
+Oleh karena itu, setiap gambar yang di-input ke model harus ditandai dengan menyisipkan `processor.boi_token` secara dinamis di dalam prompt teks.
 
 ## 3. Contoh Implementasi & Pengujian
-Berikut adalah kode pengujian yang berhasil dijalankan untuk mendeskripsikan gambar seekor lebah:
+Berikut adalah kode pengujian yang berhasil dijalankan untuk mendeskripsikan gambar:
 
 ```python
 import requests
@@ -37,51 +38,31 @@ from PIL import Image
 from transformers import AutoProcessor, AutoModelForSeq2SeqLM
 
 # 1. Muat processor dan model
-processor = AutoProcessor.from_pretrained("google/t5gemma-2-270m-270m")
-model = AutoModelForSeq2SeqLM.from_pretrained("google/t5gemma-2-270m-270m")
+processor = AutoProcessor.from_pretrained("google/t5gemma-2-4b-4b")
+model = AutoModelForSeq2SeqLM.from_pretrained("google/t5gemma-2-4b-4b")
 
-# 2. Unduh gambar lebah sebagai input
-url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/bee.jpg"
-image = Image.open(requests.get(url, stream=True).raw)
+# 2. Ambil gambar uji coba
+image = Image.open("d:/Codings/unsloth/t5-gemma-2/embedding/assets/batik.png")
 
-# 3. Definisikan prompt dengan token penanda <img>
-prompt = "<img> in this image, there is"
+# 3. Definisikan prompt dengan menyisipkan processor.boi_token
+prompt = f"{processor.boi_token} ini adalah gambar batik."
 
 # 4. Pemrosesan input dan inferensi
 model_inputs = processor(text=prompt, images=image, return_tensors="pt")
-generation = model.generate(**model_inputs, max_new_tokens=20, do_sample=False)
+generation = model.generate(**model_inputs, max_new_tokens=64, do_sample=False)
 
 # 5. Tampilkan hasil
 print("Output:", processor.decode(generation[0]))
-# Output: <bos> a bumble bee in a flower bed.<eos>
 ```
-
 ### Hasil Eksperimen
-*   **Prompt**: `"<img> in this image, there is"`
-*   **Output Model**: `<bos> a bumble bee in a flower bed.<eos>`
-*   **Kesimpulan**: Model berhasil memahami representasi gambar lebah yang disisipkan pada posisi token `<img>` dan mendeskripsikannya dengan sangat akurat ("a bumble bee in a flower bed").
+*   **Prompt**: `f"{processor.boi_token} ini adalah gambar batik."`
+*   **Decoded Inputs**: `<bos>\n\n📷<image_soft_token>... (256x) ...<end_of_image>\n\n ini adalah gambar batik.`
+*   **Kesimpulan**: Model berhasil memproses gambar `batik.png` dari aset embedding dengan mengonversi token `📷` (atau `\uf400`) menjadi urutan 256 token visual yang dapat dipahami oleh T5-Gemma-2.
 
-### 4. Hasil Eksperimen dengan Bahasa Indonesia (`max_new_tokens=64`)
-Kami juga menguji pemrosesan dengan prompt berbahasa Indonesia untuk mendeskripsikan gambar yang sama, dengan memperpanjang batas token output (`max_new_tokens=64`):
+### 4. Analisis Perilaku Pengulangan (Repetition)
+Dalam pengujian dengan parameter generasi bertipe *greedy* (`do_sample=False`), model dengan ukuran kecil (seperti 270M) atau model yang belum dilatih SFT dengan penalaran terstruktur rentan terhadap pengulangan kata (*repetition loop*). 
 
-*   **Prompt**: `"<img> di dalam gambar ini terdapat"` (Dikonstruksi di Python sebagai: `"<" + "start_of_image" + "> di dalam gambar ini terdapat"`)
-*   **Output Model**:
-    ```text
-    <bos> sebuah bunga yang berwarna merah muda.
-
-     bunga ini merupakan bunga yang berwarna merah muda.
-
-     bunga ini merupakan bunga yang berwarna merah muda.
-
-     bunga ini merupakan bunga yang berwarna merah muda.
-
-     bunga ini merupakan bunga yang berwarna merah muda.
-
-     bunga ini merupakan bunga yang berwarna merah muda.
-
-     bunga ini merupakan bunga yang berwarna
-    ```
-*   **Analisis**:
-    1.  **Kemampuan Pemahaman Gambar**: Model berhasil mendeteksi objek bunga berwarna merah muda/keunguan (tempat lebah hinggap) yang ada di dalam gambar `bee.jpg`.
-    2.  **Repetisi**: Karena menggunakan parameter dekoding *greedy* (`do_sample=False`) pada model yang relatif kecil (270M), model mengalami perulangan teks (*repetition loop*). Ini adalah perilaku yang wajar untuk model berukuran kecil jika tidak ditambahkan penalti repetisi (*repetition penalty*).
-
+Untuk mengatasi hal ini, saat melakukan inferensi dianjurkan untuk menggunakan parameter:
+*   `repetition_penalty=1.2` atau lebih tinggi.
+*   `no_repeat_ngram_size=3`.
+*   `do_sample=True` dengan `temperature=0.7`.
