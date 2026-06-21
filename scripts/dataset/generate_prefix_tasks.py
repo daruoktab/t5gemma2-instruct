@@ -4,6 +4,7 @@ import os
 import sys
 import random
 import argparse
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -57,7 +58,8 @@ class ConvState:
     turns: list[dict[str, str]] = field(default_factory=list)
     min_turns: int = 10  # 5 pasang
     max_turns: int = 14
-    min_tokens_per_turn: int = 10
+    min_tokens_user: int = 15
+    min_tokens_assistant: int = 50
 
     def get_token_count(self, text: str) -> int:
         if not self.tokenizer:
@@ -129,8 +131,8 @@ def append_turn_pair(
     u_tok = state.get_token_count(user_message)
     a_tok = state.get_token_count(final_assistant_message)
     
-    if u_tok < 5 or a_tok < state.min_tokens_per_turn:
-        return f"GAGAL: Pesan terlalu pendek. User tok: {u_tok}, Assistant tok: {a_tok} (Min: {state.min_tokens_per_turn})."
+    if u_tok < state.min_tokens_user or a_tok < state.min_tokens_assistant:
+        return f"GAGAL: Pesan terlalu pendek. User tok: {u_tok} (Min: {state.min_tokens_user}), Assistant tok: {a_tok} (Min: {state.min_tokens_assistant}). Buat argumen/jawaban yang lebih berbobot dan panjang!"
     
     state.turns.append({"role": "user", "content": user_message})
     state.turns.append({"role": "assistant", "content": final_assistant_message})
@@ -196,8 +198,23 @@ async def main():
 
     with TOPICS_MANUAL_FILE.open("r", encoding="utf-8") as f:
         all_topics = json.load(f)
+        
+    # Lacak topik yang sudah di-generate sebelumnya
+    used_topics = set()
+    if OUTPUT_FILE.exists():
+        with OUTPUT_FILE.open("r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        used_topics.add(json.loads(line).get("topik", ""))
+                    except:
+                        pass
+                        
+    # Saring hanya topik yang belum dipakai (unused topics)
+    unused_topics = [t for t in all_topics if t.get("topik", "") not in used_topics]
+    print(f"[INFO] Total topik: {len(all_topics)} | Sudah di-generate: {len(used_topics)} | Unused (Sisa): {len(unused_topics)}")
     
-    to_generate = random.sample(all_topics, min(args.target, len(all_topics)))
+    to_generate = random.sample(unused_topics, min(args.target, len(unused_topics)))
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     
     produced = 0
@@ -205,14 +222,17 @@ async def main():
         topik = entry.get("topik", "")
         print(f"\n[{i+1}/{len(to_generate)}] Generating percakapan agentic untuk topik: '{topik}'")
         
+        target_turns = random.choice([30, 32, 34, 36, 38, 40])
+        
         state = ConvState(
             topik=topik,
             summary=entry.get("summary", ""),
             task_hint=entry.get("task", ""),
             tokenizer=tokenizer,
-            min_turns=10, # Kita buat 5 pasang saja (10 turns) untuk testing
-            max_turns=14,
-            min_tokens_per_turn=10
+            min_turns=target_turns,
+            max_turns=target_turns,
+            min_tokens_user=15,
+            min_tokens_assistant=50
         )
         
         try:
@@ -223,16 +243,42 @@ async def main():
                 final_conv = [{"role": "system", "content": SYSTEM_PROMPT}] + state.turns
                 total_tok = sum(state.get_token_count(t["content"]) for t in state.turns)
                 
-                entry_out = {
-                    "id": 90000 + produced,
-                    "topik": topik,
-                    "num_turns": len(final_conv),
-                    "tokens": total_tok,
-                    "conversations": final_conv,
-                    "rationale": final_output.rationale
+                # Kalkulasi Statistik Data
+                user_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "user"]
+                asst_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "assistant"]
+                
+                prefix_usage = {}
+                for t in state.turns:
+                    if t["role"] == "assistant":
+                        prefixes = re.findall(r"<unused\d+>", t["content"])
+                        for p in prefixes:
+                            prefix_usage[p] = prefix_usage.get(p, 0) + 1
+                
+                stats = {
+                    "avg_turn_tokens": round(total_tok / len(state.turns) if state.turns else 0, 1),
+                    "min_user_tokens": min(user_tokens) if user_tokens else 0,
+                    "max_user_tokens": max(user_tokens) if user_tokens else 0,
+                    "avg_user_tokens": round(sum(user_tokens) / len(user_tokens) if user_tokens else 0, 1),
+                    "min_asst_tokens": min(asst_tokens) if asst_tokens else 0,
+                    "max_asst_tokens": max(asst_tokens) if asst_tokens else 0,
+                    "avg_asst_tokens": round(sum(asst_tokens) / len(asst_tokens) if asst_tokens else 0, 1),
+                    "prefix_usage": prefix_usage
                 }
                 
-                with OUTPUT_FILE.open("w", encoding="utf-8") as f:
+                entry_out = {
+                    "id": 90000 + produced,
+                    "topic_id": entry.get("id", None),
+                    "topik": topik,
+                    "topik_summary": entry.get("summary", ""),
+                    "task_hint": entry.get("task", ""),
+                    "num_turns": len(final_conv),
+                    "tokens": total_tok,
+                    "stats": stats,
+                    "rationale": final_output.rationale,
+                    "conversations": final_conv
+                }
+                
+                with OUTPUT_FILE.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(entry_out, ensure_ascii=False) + "\n")
                     
                 print(f"  ✓ BERHASIL: {len(state.turns)} turns, {total_tok} tokens.")
