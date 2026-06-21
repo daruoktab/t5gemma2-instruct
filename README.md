@@ -58,8 +58,9 @@ Proyek ini melatih model secara langsung menggunakan kombinasi SFT dan DPO pada 
    - **T5-Gemma-2 4B-4B**: Pelatihan penuh menggunakan LoRA $(r=128, \alpha=256)$ melatih ~755 juta parameter (~10.6% dari total model) pada seluruh dataset (31.299 sampel).
 2. **Logit Masking**:
    - Memblokir logits untuk token yang tidak digunakan (*unused tokens*) dan token visual di encoder guna memastikan stabilitas generasi teks dan mencegah halusinasi token non-teks.
-3. **Implicit Task Steering & Context Routing (In-Task Learning)**:
-   - Melatih encoder secara implisit untuk memetakan representasi *hidden states* berdasarkan kategori tugas (*Summarization*, *Translation*, *Q&A*) melalui perambatan gradien (*backpropagation*) decoder cross-attention tanpa memerlukan manipulasi prompt statis atau *hardcoding* di backend. Vektor representasi encoder akan mengelompok secara alami sesuai instruksi tugas.
+3. **Implicit Task Steering & Unused Tokens as Task Prefix**:
+   - Melatih encoder secara implisit untuk memetakan representasi *hidden states* dari input *user* yang murni menggunakan bahasa natural tanpa awalan kaku.
+   - Di sisi decoder, model akan mendeteksi intent dari percakapan dan secara mandiri mendeklarasikan *task prefix* menggunakan **Unused Tokens** (seperti `<unused1>` untuk *summarize*, `<unused2>` untuk *translate*) sesaat setelah token awal (BOS) sebelum menghasilkan teks utama. Ini berfungsi sebagai konfirmasi *intent* (mirip *Chain-of-Thought* tugas ringkas) yang meningkatkan koherensi respons *multi-task* secara drastis, tanpa perlu mencemari bahasa natural dengan *prompt user* berformat khusus.
 
 ---
 

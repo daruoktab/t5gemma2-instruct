@@ -79,7 +79,7 @@ Satu-satunya perbedaan teknis di level ID adalah posisi token vision:
 ### Struktur Unused Tokens (Penting untuk Suppression)
 | Blok | ID Range | Jumlah | Keterangan |
 |---|---|---|---|
-| **Blok 1** | 6 – 104 | 99 | `<unused0>` – `<unused98>` (Sangat berbahaya, dekat special tokens) |
+| **Blok 1** | 6 – 104 | 99 | `<unused0>` – `<unused98>`. **Pengecualian:** `<unused1>` hingga `<unused6>` (ID 7-12) *tidak* di-suppress karena digunakan untuk *Task Prefix*! |
 | **Blok 2** | 256.002 – 262.143 | 6142 | `<unused100>` – `<unused6241>` |
 
 > [!WARNING]
