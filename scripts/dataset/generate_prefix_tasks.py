@@ -44,8 +44,10 @@ TOPICS_MANUAL_FILE  = DATA_DIR / "generated_topics_manual.json"
 OUTPUT_FILE         = DATA_DIR / "generated_prefix_tasks_agentic.jsonl"
 
 SYSTEM_PROMPT = (
-    "Kamu adalah asisten AI yang helpful, santai, dan ramah. "
-    "Gunakan Bahasa Indonesia sebagai bahasa utama."
+    "Kamu adalah Gemma, asisten AI cerdas berbahasa Indonesia yang dirancang untuk membantu pengguna dalam berbagai tugas pemrosesan bahasa (NLP) maupun percakapan sehari-hari. "
+    "Kamu ahli dalam merangkum teks, menerjemahkan, mengekstraksi informasi (NER), menjawab pertanyaan (QA), serta memparafrase kalimat. "
+    "Selain tugas-tugas teknis tersebut, kamu juga sangat mumpuni dalam menjawab pertanyaan umum, berdiskusi, atau sekadar mengobrol santai secara general. "
+    "Selalu berikan respons yang akurat, terstruktur, namun tetap mempertahankan gaya bahasa yang ramah dan natural."
 )
 
 # ─── State Management ────────────────────────────────────────────────────────
@@ -97,27 +99,32 @@ agent = Agent(
     model_string,
     deps_type=ConvState,
     output_type=ConversationResult,
+    retries=5,
     system_prompt=(
         "Kamu adalah spesialis pembuat dataset percakapan multi-turn Bahasa Indonesia untuk tugas NLP campuran.\n"
         "Tugasmu adalah membangun percakapan secara bertahap menggunakan tool `append_turn_pair`.\n\n"
         "ATURAN SUPER KETAT:\n"
-        "1. Percakapan HARUS mencapai target {ctx.deps.min_turns} hingga {ctx.deps.max_turns} pesan total (termasuk user dan assistant).\n"
+        "1. IDENTITAS BOT: Asisten AI di dalam percakapan bernama 'Gemma'. Selalu jawab dan posisikan AI sebagai Gemma.\n"
         "2. Di setiap turn assistant, kamu WAJIB menentukan array `task_prefixes` dari TaskType Enum yang relevan dengan pertanyaan user.\n"
         "   - Contoh: Jika user minta ringkas & terjemahkan, pilih [SUMMARIZE, TRANSLATE].\n"
         "   - Jika hanya ngobrol biasa, pilih [GENERAL_CHAT].\n"
-        "3. User (pengguna manusia) TIDAK BOLEH tahu atau mengucapkan prefix. Pengguna ngobrol dengan bahasa natural biasa.\n"
-        "4. Asisten menjawab seperti biasa (kamu cukup isi teksnya di `assistant_message`, prefix token akan disisipkan otomatis oleh tool).\n"
+        "3. PENTING: `human_user_message` HARUS berisi ucapan PENGGUNA MANUSIA. `ai_assistant_message` HARUS berisi respons dari BOT AI. JANGAN PERNAH TERTUKAR PERANNYA!\n"
+        "4. Asisten menjawab seperti biasa (kamu cukup isi teksnya di `ai_assistant_message`, prefix token akan disisipkan otomatis oleh tool).\n"
     )
 )
 
 @agent.tool
-def append_turn_pair(
+async def append_turn_pair(
     ctx: RunContext[ConvState], 
-    user_message: str, 
+    human_user_message: str, 
     task_prefixes: list[TaskType], 
-    assistant_message: str
+    ai_assistant_message: str
 ) -> str:
     """Tambahkan 1 pasang pesan (user lalu assistant) ke akhir percakapan dengan Task Prefixes yang sesuai."""
+    # THROTTLING UNTUK API FREE TIER (MAX 10 RPM)
+    # 5 detik + waktu komputasi akan menempatkan kita di batas tipis ~9-10 RPM
+    await asyncio.sleep(5)
+    
     state = ctx.deps
     
     if not task_prefixes:
@@ -126,15 +133,15 @@ def append_turn_pair(
     prefix_str = "".join([t.value for t in task_prefixes])
     
     # Prepend the unused tokens
-    final_assistant_message = f"{prefix_str}{assistant_message}"
+    final_assistant_message = f"{prefix_str}{ai_assistant_message}"
     
-    u_tok = state.get_token_count(user_message)
+    u_tok = state.get_token_count(human_user_message)
     a_tok = state.get_token_count(final_assistant_message)
     
     if u_tok < state.min_tokens_user or a_tok < state.min_tokens_assistant:
         return f"GAGAL: Pesan terlalu pendek. User tok: {u_tok} (Min: {state.min_tokens_user}), Assistant tok: {a_tok} (Min: {state.min_tokens_assistant}). Buat argumen/jawaban yang lebih berbobot dan panjang!"
     
-    state.turns.append({"role": "user", "content": user_message})
+    state.turns.append({"role": "user", "content": human_user_message})
     state.turns.append({"role": "assistant", "content": final_assistant_message})
     
     total_turns = len(state.turns)
@@ -182,7 +189,10 @@ def add_topic_context(ctx: RunContext[ConvState]) -> str:
         f"- Topik: {ctx.deps.topik}\n"
         f"- Ringkasan: {ctx.deps.summary}\n"
         f"- Task Hint: {ctx.deps.task_hint}\n\n"
-        f"Gunakan `append_turn_pair` berulang kali. Ingat, setiap respons asisten butuh task_prefixes yang tepat!"
+        f"ATURAN SUPER KETAT:\n"
+        f"1. Percakapan INI HARUS mencapai TEPAT {ctx.deps.min_turns} pesan total (termasuk user dan assistant).\n"
+        f"Gunakan `append_turn_pair` berulang kali sampai tool tersebut merespons 'TARGET TERCAPAI'.\n"
+        f"Jangan panggil final result sebelum tool menyatakan target tercapai!"
     )
 
 async def main():
@@ -235,59 +245,74 @@ async def main():
             min_tokens_assistant=50
         )
         
-        try:
-            result = await agent.run("Silakan mulai membangun percakapan dari awal. Ingat untuk menggunakan Enum TaskType dengan benar.", deps=state)
-            
-            final_output = cast(ConversationResult, result.output)
-            if final_output.is_valid and len(state.turns) >= state.min_turns:
-                final_conv = [{"role": "system", "content": SYSTEM_PROMPT}] + state.turns
-                total_tok = sum(state.get_token_count(t["content"]) for t in state.turns)
+        max_api_retries = 3
+        for attempt in range(max_api_retries):
+            try:
+                result = await agent.run("Silakan mulai membangun percakapan dari awal. Ingat untuk menggunakan Enum TaskType dengan benar.", deps=state)
                 
-                # Kalkulasi Statistik Data
-                user_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "user"]
-                asst_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "assistant"]
-                
-                prefix_usage = {}
-                for t in state.turns:
-                    if t["role"] == "assistant":
-                        prefixes = re.findall(r"<unused\d+>", t["content"])
-                        for p in prefixes:
-                            prefix_usage[p] = prefix_usage.get(p, 0) + 1
-                
-                stats = {
-                    "avg_turn_tokens": round(total_tok / len(state.turns) if state.turns else 0, 1),
-                    "min_user_tokens": min(user_tokens) if user_tokens else 0,
-                    "max_user_tokens": max(user_tokens) if user_tokens else 0,
-                    "avg_user_tokens": round(sum(user_tokens) / len(user_tokens) if user_tokens else 0, 1),
-                    "min_asst_tokens": min(asst_tokens) if asst_tokens else 0,
-                    "max_asst_tokens": max(asst_tokens) if asst_tokens else 0,
-                    "avg_asst_tokens": round(sum(asst_tokens) / len(asst_tokens) if asst_tokens else 0, 1),
-                    "prefix_usage": prefix_usage
-                }
-                
-                entry_out = {
-                    "id": 90000 + produced,
-                    "topic_id": entry.get("id", None),
-                    "topik": topik,
-                    "topik_summary": entry.get("summary", ""),
-                    "task_hint": entry.get("task", ""),
-                    "num_turns": len(final_conv),
-                    "tokens": total_tok,
-                    "stats": stats,
-                    "rationale": final_output.rationale,
-                    "conversations": final_conv
-                }
-                
-                with OUTPUT_FILE.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(entry_out, ensure_ascii=False) + "\n")
+                final_output = cast(ConversationResult, result.output)
+                if final_output.is_valid and len(state.turns) >= state.min_turns:
+                    final_conv = [{"role": "system", "content": SYSTEM_PROMPT}] + state.turns
+                    total_tok = sum(state.get_token_count(t["content"]) for t in state.turns)
                     
-                print(f"  ✓ BERHASIL: {len(state.turns)} turns, {total_tok} tokens.")
-                produced += 1
-            else:
-                print(f"  ✗ GAGAL: (Turns: {len(state.turns)}). Rationale: {final_output.rationale}")
+                    # Kalkulasi Statistik Data
+                    user_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "user"]
+                    asst_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "assistant"]
+                    
+                    prefix_usage = {}
+                    for t in state.turns:
+                        if t["role"] == "assistant":
+                            prefixes = re.findall(r"<unused\d+>", t["content"])
+                            for p in prefixes:
+                                prefix_usage[p] = prefix_usage.get(p, 0) + 1
+                    
+                    stats = {
+                        "avg_turn_tokens": round(total_tok / len(state.turns) if state.turns else 0, 1),
+                        "min_user_tokens": min(user_tokens) if user_tokens else 0,
+                        "max_user_tokens": max(user_tokens) if user_tokens else 0,
+                        "avg_user_tokens": round(sum(user_tokens) / len(user_tokens) if user_tokens else 0, 1),
+                        "min_asst_tokens": min(asst_tokens) if asst_tokens else 0,
+                        "max_asst_tokens": max(asst_tokens) if asst_tokens else 0,
+                        "avg_asst_tokens": round(sum(asst_tokens) / len(asst_tokens) if asst_tokens else 0, 1),
+                        "prefix_usage": prefix_usage
+                    }
+                    
+                    entry_out = {
+                        "id": 90000 + produced,
+                        "topic_id": entry.get("id", None),
+                        "topik": topik,
+                        "topik_summary": entry.get("summary", ""),
+                        "task_hint": entry.get("task", ""),
+                        "num_turns": len(final_conv),
+                        "tokens": total_tok,
+                        "stats": stats,
+                        "rationale": final_output.rationale,
+                        "conversations": final_conv
+                    }
+                    
+                    with OUTPUT_FILE.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(entry_out, ensure_ascii=False) + "\n")
+                        
+                    print(f"  ✓ BERHASIL: {len(state.turns)} turns, {total_tok} tokens.")
+                    produced += 1
+                else:
+                    print(f"  ✗ GAGAL: (Turns: {len(state.turns)}). Rationale: {final_output.rationale}")
                 
-        except Exception as e:
-            print(f"  ✗ ERROR: {e}")
+                # Jika sukses atau gagal logika (bukan error API), break dari retry loop
+                break
+                
+            except Exception as e:
+                err_msg = str(e)
+                if "429" in err_msg or "rate limit" in err_msg.lower():
+                    if attempt < max_api_retries - 1:
+                        wait_time = (attempt + 1) * 30  # Tunggu 30 detik, lalu 60 detik
+                        print(f"  [!] Terkena Rate Limit (429). Menunggu {wait_time} detik sebelum mencoba lagi (Percobaan {attempt+1}/{max_api_retries})...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        print(f"  ✗ ERROR FATAL: Terkena Rate Limit dan sudah mencoba {max_api_retries} kali.")
+                else:
+                    print(f"  ✗ ERROR: {e}")
+                    break  # Break jika error lain yang bukan rate limit
 
 if __name__ == "__main__":
     asyncio.run(main())
