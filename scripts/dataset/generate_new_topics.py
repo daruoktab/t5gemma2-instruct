@@ -153,7 +153,7 @@ async def main():
         
         for chunk in range(5):
             print(f"  -> Memproses bagian {chunk+1}/5 (10 topik)...")
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
             
             new_titles = [t["topik"] for t in all_new_topics + niche_topics]
             recent_titles = new_titles[-500:] # Cukup 500 topik terakhir sebagai pencegah loop-ulang
@@ -186,6 +186,14 @@ async def main():
                 
         all_new_topics.extend(niche_topics)
         
+        # Jika sudah mencapai atau melebihi 2500, potong tepat 2500 dan hentikan
+        if len(all_new_topics) >= 2500:
+            all_new_topics = all_new_topics[:2500]
+            with open(NEW_TOPICS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(all_new_topics, f, ensure_ascii=False, indent=2)
+            print(f"  -> Sukses memotong tepat 2500 topik.")
+            break
+            
         # Save progress incrementally (Auto-Save)
         with open(NEW_TOPICS_FILE, 'w', encoding='utf-8') as f:
             json.dump(all_new_topics, f, ensure_ascii=False, indent=2)

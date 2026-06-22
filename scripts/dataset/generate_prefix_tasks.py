@@ -40,7 +40,7 @@ API_KEY      = os.environ.get("OPENMODEL_API_KEY") or os.environ.get("API_KEY")
 API_MODEL    = os.environ.get("API_MODEL", "deepseek-chat")
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
-TOPICS_MANUAL_FILE  = DATA_DIR / "generated_topics_manual.json"
+TOPICS_FILE         = DATA_DIR / "generated_topics_new_2500.json"
 OUTPUT_FILE         = DATA_DIR / "generated_prefix_tasks_agentic.jsonl"
 
 SYSTEM_PROMPT = (
@@ -105,11 +105,19 @@ agent = Agent(
         "Tugasmu adalah membangun percakapan secara bertahap menggunakan tool `append_turn_pair`.\n\n"
         "ATURAN SUPER KETAT:\n"
         "1. IDENTITAS BOT: Asisten AI di dalam percakapan bernama 'Gemma'. Selalu jawab dan posisikan AI sebagai Gemma.\n"
-        "2. Di setiap turn assistant, kamu WAJIB menentukan array `task_prefixes` dari TaskType Enum yang relevan dengan pertanyaan user.\n"
-        "   - Contoh: Jika user minta ringkas & terjemahkan, pilih [SUMMARIZE, TRANSLATE].\n"
+        "2. Di setiap turn assistant, kamu WAJIB menentukan array `task_prefixes` dari TaskType Enum yang relevan dengan pertanyaan user (MAKSIMAL 3 pilihan token per turn).\n"
+        "   - PENTING: Jika kamu memilih lebih dari 1 token (misal 2 atau 3), respons asisten yang kamu buat HARUS secara nyata memenuhi dan mencakup gabungan tugas dari seluruh token yang kamu pilih tersebut.\n"
+        "   - Contoh: Jika memilih [SUMMARIZE, TRANSLATE], respons asisten harus berupa rangkuman DAN diterjemahkan.\n"
         "   - Jika hanya ngobrol biasa, pilih [GENERAL_CHAT].\n"
         "3. PENTING: `human_user_message` HARUS berisi ucapan PENGGUNA MANUSIA. `ai_assistant_message` HARUS berisi respons dari BOT AI. JANGAN PERNAH TERTUKAR PERANNYA!\n"
         "4. Asisten menjawab seperti biasa (kamu cukup isi teksnya di `ai_assistant_message`, prefix token akan disisipkan otomatis oleh tool).\n"
+        "5. TAHAP EVALUASI & SELF-REVIEW (WAJIB):\n"
+        "   Setelah target jumlah turn tercapai (misal 30/40 turn), JANGAN langsung mengembalikan hasil.\n"
+        "   Lakukan evaluasi ulang terhadap seluruh percakapan yang telah dibuat menggunakan tool `get_conversation_status`:\n"
+        "   - Periksa apakah semua turn asisten memiliki prefix token `<unusedX>` yang tepat, relevan, dan maksimal 3 token per turn.\n"
+        "   - DILARANG menumpuk lebih dari 3 token. Jika ada turn asisten yang memiliki lebih dari 3 token, ini adalah KESALAHAN logika. Segera edit turn tersebut menggunakan `edit_turn_content` untuk memangkasnya menjadi 1 atau maksimal 2-3 token yang paling relevan.\n"
+        "   - Kamu bisa mengoreksi isi pesan maupun pilihan token prefix asisten dengan menggunakan tool `edit_turn_content` (ingat untuk menuliskan token `<unusedX>` di awal secara manual saat mengedit pesan asisten).\n"
+        "   - Setelah semuanya dipastikan bersih, konsisten, dan berkualitas tinggi, barulah kembalikan hasil akhir via output model."
     )
 )
 
@@ -129,6 +137,9 @@ async def append_turn_pair(
     
     if not task_prefixes:
         return "GAGAL: Kamu harus memilih setidaknya 1 task_prefix dari Enum TaskType!"
+        
+    if len(task_prefixes) > 3:
+        return f"GAGAL: Kamu memilih {len(task_prefixes)} prefix. Jumlah maksimal prefix yang diperbolehkan per turn adalah 3! Silakan pilih kembali dengan maksimal 3 prefix."
         
     prefix_str = "".join([t.value for t in task_prefixes])
     
@@ -191,8 +202,11 @@ def add_topic_context(ctx: RunContext[ConvState]) -> str:
         f"- Task Hint: {ctx.deps.task_hint}\n\n"
         f"ATURAN SUPER KETAT:\n"
         f"1. Percakapan INI HARUS mencapai TEPAT {ctx.deps.min_turns} pesan total (termasuk user dan assistant).\n"
-        f"Gunakan `append_turn_pair` berulang kali sampai tool tersebut merespons 'TARGET TERCAPAI'.\n"
-        f"Jangan panggil final result sebelum tool menyatakan target tercapai!"
+        f"   Gunakan `append_turn_pair` berulang kali sampai tool tersebut merespons 'TARGET TERCAPAI'.\n"
+        f"2. ALUR VERIFIKASI MANDIRI:\n"
+        f"   Setelah target tercapai, panggil `get_conversation_status` untuk me-review kembali seluruh percakapan.\n"
+        f"   Pastikan pilihan token prefix `<unusedX>` logis dan MAKSIMAL 3 token per turn (jangan sampai bertumpuk lebih dari 3!).\n"
+        f"   Gunakan `edit_turn_content` untuk memperbaiki isi atau token jika ada yang salah sebelum mengembalikan hasil akhir!"
     )
 
 async def main():
@@ -201,36 +215,57 @@ async def main():
         sys.exit(1)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--target", type=int, default=1)
+    parser.add_argument("--target", type=int, default=50, help="Jumlah percakapan yang ingin dibuat (harus kelipatan 50)")
     args = parser.parse_args()
+
+    # Pastikan target kelipatan 50
+    if args.target % 50 != 0:
+        print("[WARNING] Target bukan kelipatan 50. Membulatkan target ke atas ke kelipatan 50 terdekat.")
+        args.target = ((args.target + 49) // 50) * 50
+        print(f"[INFO] Target disesuaikan menjadi: {args.target}")
 
     tokenizer = AutoTokenizer.from_pretrained("google/t5gemma-2-270m-270m", trust_remote_code=True)
 
-    with TOPICS_MANUAL_FILE.open("r", encoding="utf-8") as f:
+    with TOPICS_FILE.open("r", encoding="utf-8") as f:
         all_topics = json.load(f)
         
-    # Lacak topik yang sudah di-generate sebelumnya
+    # Lacak topik yang sudah di-generate sebelumnya dari file JSONL
     used_topics = set()
+    total_existing = 0
     if OUTPUT_FILE.exists():
         with OUTPUT_FILE.open("r", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     try:
                         used_topics.add(json.loads(line).get("topik", ""))
+                        total_existing += 1
                     except:
                         pass
-                        
+    
+    print(f"[INFO] Total topik di file: {len(all_topics)} | Sudah di-generate di JSONL: {total_existing}")
+    
     # Saring hanya topik yang belum dipakai (unused topics)
     unused_topics = [t for t in all_topics if t.get("topik", "") not in used_topics]
-    print(f"[INFO] Total topik: {len(all_topics)} | Sudah di-generate: {len(used_topics)} | Unused (Sisa): {len(unused_topics)}")
+    print(f"[INFO] Sisa topik yang belum dibuat percakapan (Unused): {len(unused_topics)}")
+
+    if len(unused_topics) == 0:
+        print("[INFO] Semua topik sudah selesai di-generate percakapannya.")
+        return
+
+    produced_in_this_run = 0
+    batch_buffer = []
     
-    to_generate = random.sample(unused_topics, min(args.target, len(unused_topics)))
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    
-    produced = 0
-    for i, entry in enumerate(to_generate):
+    # Acak daftar unused_topics agar bervariasi
+    random.shuffle(unused_topics)
+    topic_index = 0
+
+    while produced_in_this_run < args.target and topic_index < len(unused_topics):
+        entry = unused_topics[topic_index]
         topik = entry.get("topik", "")
-        print(f"\n[{i+1}/{len(to_generate)}] Generating percakapan agentic untuk topik: '{topik}'")
+        topic_index += 1
+        
+        current_overall_id = total_existing + produced_in_this_run + len(batch_buffer)
+        print(f"\n[Progress: {produced_in_this_run + len(batch_buffer) + 1}/{args.target}] Generating percakapan untuk topik: '{topik}'")
         
         target_turns = random.choice([30, 32, 34, 36, 38, 40])
         
@@ -246,8 +281,13 @@ async def main():
         )
         
         max_api_retries = 3
+        success = False
+        
         for attempt in range(max_api_retries):
             try:
+                # Tambahan throttling kecil per percakapan (2 detik)
+                await asyncio.sleep(2)
+                
                 result = await agent.run("Silakan mulai membangun percakapan dari awal. Ingat untuk menggunakan Enum TaskType dengan benar.", deps=state)
                 
                 final_output = cast(ConversationResult, result.output)
@@ -278,7 +318,7 @@ async def main():
                     }
                     
                     entry_out = {
-                        "id": 90000 + produced,
+                        "id": 90000 + current_overall_id,
                         "topic_id": entry.get("id", None),
                         "topik": topik,
                         "topik_summary": entry.get("summary", ""),
@@ -290,13 +330,11 @@ async def main():
                         "conversations": final_conv
                     }
                     
-                    with OUTPUT_FILE.open("a", encoding="utf-8") as f:
-                        f.write(json.dumps(entry_out, ensure_ascii=False) + "\n")
-                        
-                    print(f"  ✓ BERHASIL: {len(state.turns)} turns, {total_tok} tokens.")
-                    produced += 1
+                    batch_buffer.append(entry_out)
+                    print(f"  ✓ BERHASIL GENERATE: {len(state.turns)} turns, {total_tok} tokens. (Di buffer: {len(batch_buffer)}/50)")
+                    success = True
                 else:
-                    print(f"  ✗ GAGAL: (Turns: {len(state.turns)}). Rationale: {final_output.rationale}")
+                    print(f"  ✗ GAGAL LOGIKA AGEN: (Turns: {len(state.turns)}). Rationale: {final_output.rationale}")
                 
                 # Jika sukses atau gagal logika (bukan error API), break dari retry loop
                 break
@@ -304,15 +342,38 @@ async def main():
             except Exception as e:
                 err_msg = str(e)
                 if "429" in err_msg or "rate limit" in err_msg.lower():
-                    if attempt < max_api_retries - 1:
-                        wait_time = (attempt + 1) * 30  # Tunggu 30 detik, lalu 60 detik
-                        print(f"  [!] Terkena Rate Limit (429). Menunggu {wait_time} detik sebelum mencoba lagi (Percobaan {attempt+1}/{max_api_retries})...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        print(f"  ✗ ERROR FATAL: Terkena Rate Limit dan sudah mencoba {max_api_retries} kali.")
+                    wait_time = (attempt + 1) * 30  # Tunggu 30 detik, lalu 60 detik
+                    print(f"  [!] Terkena Rate Limit (429) pada Percobaan {attempt+1}/{max_api_retries}. Menunggu {wait_time} detik...")
+                    await asyncio.sleep(wait_time)
                 else:
-                    print(f"  ✗ ERROR: {e}")
-                    break  # Break jika error lain yang bukan rate limit
+                    print(f"  [!] ERROR API/Sistem pada Percobaan {attempt+1}/{max_api_retries}: {e}")
+                    await asyncio.sleep(5)
+        
+        # Jika gagal total setelah retries, skip topik ini dan biarkan lanjut ke topik berikutnya
+        if not success:
+            print(f"  [!] Topik '{topik}' gagal dibuat setelah {max_api_retries} percobaan. Dilewati (skipping)...")
+            continue
+
+        # Jika buffer sudah penuh 50 percakapan, tulis ke JSONL
+        if len(batch_buffer) == 50:
+            OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with OUTPUT_FILE.open("a", encoding="utf-8") as f:
+                for item in batch_buffer:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            
+            produced_in_this_run += 50
+            batch_buffer.clear()
+            print(f"\n==================================================")
+            print(f"✓ BERHASIL MENULIS BATCH 50 PERCAKAPAN KE FILE!")
+            print(f"Total yang ditulis pada sesi ini: {produced_in_this_run}")
+            print(f"Total data di file output saat ini: {total_existing + produced_in_this_run}")
+            print(f"==================================================\n")
+
+    # Jika script selesai tapi buffer belum genap 50
+    if len(batch_buffer) > 0:
+        print(f"\n[INFO] Sesi selesai. Terdapat {len(batch_buffer)} data di buffer yang BELUM ditulis ke JSONL.")
+        print(f"[INFO] Karena aturan kelipatan 50, data sisa ini dibuang agar file output tetap konsisten kelipatan 50.")
+        print(f"[INFO] Anda dapat menjalankan ulang script untuk meng-generate ulang dari topik-topik tersebut.")
 
 if __name__ == "__main__":
     asyncio.run(main())
