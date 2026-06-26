@@ -64,10 +64,10 @@ Proyek ini melatih model secara langsung menggunakan kombinasi SFT dan DPO pada 
 
 ---
 
-## 📊 Dataset Spesifikasi
+## 📊 Dataset Spesifikasi (Update V2)
 
 Dataset yang digunakan berfokus pada kualitas tinggi dan format multi-turn dalam Bahasa Indonesia:
-1. **`chat_multiturn`**: 2.500 percakapan multi-turn hasil kurasi manual dan distilasi API (sebelum unroll menjadi puluhan ribu baris SFT).
+1. **`chat_multiturn`**: 3.000 percakapan utuh multi-turn (500 data Agentic Prefix-Task baru, beserta 2.500 data lama yang telah dikonversi menyeluruh agar formatnya konsisten dengan data baru). Saat dipecah (unroll) untuk data latih (SFT), total menjadi 36.015 baris (turn) pelatihan SFT.
 2. **`indoqa_documents`**: ~4.400 contoh pemahaman bacaan dan Q&A berbasis dokumen Indonesia.
 
 Format data menggunakan skema OpenAI/ChatML standar:

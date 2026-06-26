@@ -5,6 +5,8 @@ import sys
 import random
 import argparse
 import re
+import time
+import httpx
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -36,8 +38,26 @@ class TaskType(str, Enum):
 
 # ─── Konfigurasi API ─────────────────────────────────────────────────────────
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openmodel.ai/v1")
-API_KEY      = os.environ.get("OPENMODEL_API_KEY") or os.environ.get("API_KEY")
 API_MODEL    = os.environ.get("API_MODEL", "deepseek-chat")
+
+# Ambil semua API key yang dikonfigurasi
+API_KEYS = []
+idx = 1
+while True:
+    k = os.environ.get(f"OPENMODEL_API_KEY_{idx}") or os.environ.get(f"API_KEY_{idx}")
+    if k:
+        API_KEYS.append(k.strip())
+        idx += 1
+    else:
+        break
+
+if not API_KEYS:
+    raw_key = os.environ.get("OPENMODEL_API_KEY") or os.environ.get("API_KEY")
+    if raw_key:
+        if "," in raw_key:
+            API_KEYS = [k.strip() for k in raw_key.split(",") if k.strip()]
+        else:
+            API_KEYS = [raw_key]
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 TOPICS_FILE         = DATA_DIR / "generated_topics_new_2500.json"
@@ -79,11 +99,14 @@ if "deepseek" in model_name_only.lower():
     provider = "anthropic"
 model_string = f"{provider}:{model_name_only}"
 
+# Fallback global env configuration
+fallback_key = API_KEYS[0] if API_KEYS else ""
+
 if provider in ["openai", "openai-chat"]:
     if API_BASE_URL:
         os.environ["OPENAI_BASE_URL"] = API_BASE_URL
-    if API_KEY:
-        os.environ["OPENAI_API_KEY"] = API_KEY
+    if fallback_key:
+        os.environ["OPENAI_API_KEY"] = fallback_key
 elif provider == "anthropic":
     if API_BASE_URL:
         base = API_BASE_URL
@@ -92,8 +115,92 @@ elif provider == "anthropic":
         elif base.endswith("/v1/"):
             base = base[:-4]
         os.environ["ANTHROPIC_BASE_URL"] = base
-    if API_KEY:
-        os.environ["ANTHROPIC_API_KEY"] = API_KEY
+    if fallback_key:
+        os.environ["ANTHROPIC_API_KEY"] = fallback_key
+
+class RateLimitedAsyncClient(httpx.AsyncClient):
+    def __init__(self, *args, rate_limit_delay: float = 6.0, worker_id: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.rate_limit_delay = rate_limit_delay
+        self.worker_id = worker_id
+        self.last_request_time = 0.0
+        self.request_lock = asyncio.Lock()
+
+    async def send(self, request: httpx.Request, *args, **kwargs):
+        async with self.request_lock:
+            now = time.time()
+            elapsed = now - self.last_request_time
+            if elapsed < self.rate_limit_delay:
+                wait_needed = self.rate_limit_delay - elapsed
+                await asyncio.sleep(wait_needed)
+            self.last_request_time = time.time()
+
+        max_http_retries = 5
+        for attempt in range(max_http_retries):
+            try:
+                request.read()
+                response = await super().send(request, *args, **kwargs)
+                
+                # Check for 429
+                if response.status_code == 429:
+                    wait_time = (attempt + 1) * 30
+                    print(f"  [!] [Worker {self.worker_id}] HTTP 429 Rate Limit. Menunggu {wait_time} detik sebelum mencoba lagi (Attempt {attempt+1}/{max_http_retries})...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                # Check for other server errors
+                if response.status_code in [500, 502, 503, 504]:
+                    wait_time = (attempt + 1) * 5
+                    print(f"  [!] [Worker {self.worker_id}] HTTP {response.status_code}. Menunggu {wait_time} detik sebelum mencoba lagi...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                    
+                return response
+            except Exception as e:
+                if attempt == max_http_retries - 1:
+                    raise e
+                wait_time = (attempt + 1) * 5
+                print(f"  [!] [Worker {self.worker_id}] HTTP Request error: {e}. Menunggu {wait_time} detik sebelum mencoba lagi...")
+                await asyncio.sleep(wait_time)
+
+def create_model_instance(model_string: str, base_url: str | None, api_key: str, worker_id: int):
+    provider_name = model_string.split(":")[0] if ":" in model_string else "openai-chat"
+    model_name_only = model_string.split(":")[-1]
+    if "deepseek" in model_name_only.lower():
+        provider_name = "anthropic"
+        
+    client = RateLimitedAsyncClient(rate_limit_delay=6.0, worker_id=worker_id, timeout=60.0)
+        
+    if provider_name in ["openai", "openai-chat"]:
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+        
+        custom_provider = OpenAIProvider(
+            base_url=base_url,
+            api_key=api_key,
+            http_client=client
+        )
+        return OpenAIChatModel(model_name_only, provider=custom_provider)
+    elif provider_name == "anthropic":
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+        
+        base = base_url
+        if base:
+            if base.endswith("/v1"):
+                base = base[:-3]
+            elif base.endswith("/v1/"):
+                base = base[:-4]
+                
+        custom_provider = AnthropicProvider(
+            base_url=base,
+            api_key=api_key,
+            http_client=client
+        )
+        return AnthropicModel(model_name_only, provider=custom_provider)
+    else:
+        from pydantic_ai import models
+        return models.infer_model(model_string)
 
 agent = Agent(
     model_string,
@@ -129,9 +236,8 @@ async def append_turn_pair(
     ai_assistant_message: str
 ) -> str:
     """Tambahkan 1 pasang pesan (user lalu assistant) ke akhir percakapan dengan Task Prefixes yang sesuai."""
-    # THROTTLING UNTUK API FREE TIER (MAX 10 RPM)
-    # 5 detik + waktu komputasi akan menempatkan kita di batas tipis ~9-10 RPM
-    await asyncio.sleep(5)
+    # Rate limit handled globally by RateLimitedAsyncClient
+    await asyncio.sleep(0.5)
     
     state = ctx.deps
     
@@ -210,12 +316,13 @@ def add_topic_context(ctx: RunContext[ConvState]) -> str:
     )
 
 async def main():
-    if not API_KEY:
-        print("[ERROR] Set OPENMODEL_API_KEY")
+    if not API_KEYS:
+        print("[ERROR] Set OPENMODEL_API_KEY atau OPENMODEL_API_KEY_1, OPENMODEL_API_KEY_2, dst.")
         sys.exit(1)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", type=int, default=50, help="Jumlah percakapan yang ingin dibuat (harus kelipatan 50)")
+    parser.add_argument("--workers", type=int, default=len(API_KEYS), help="Jumlah worker paralel (default: jumlah API key)")
     args = parser.parse_args()
 
     # Pastikan target kelipatan 50
@@ -223,6 +330,9 @@ async def main():
         print("[WARNING] Target bukan kelipatan 50. Membulatkan target ke atas ke kelipatan 50 terdekat.")
         args.target = ((args.target + 49) // 50) * 50
         print(f"[INFO] Target disesuaikan menjadi: {args.target}")
+
+    num_workers = args.workers
+    print(f"[INFO] Menggunakan {num_workers} worker paralel dengan {len(API_KEYS)} API key.")
 
     tokenizer = AutoTokenizer.from_pretrained("google/t5gemma-2-270m-270m", trust_remote_code=True)
 
@@ -257,117 +367,150 @@ async def main():
     
     # Acak daftar unused_topics agar bervariasi
     random.shuffle(unused_topics)
+    
+    # State control for workers
     topic_index = 0
+    topic_lock = asyncio.Lock()
+    
+    successful_count = 0
+    success_lock = asyncio.Lock()
+    
+    write_lock = asyncio.Lock()
 
-    while produced_in_this_run < args.target and topic_index < len(unused_topics):
-        entry = unused_topics[topic_index]
-        topik = entry.get("topik", "")
-        topic_index += 1
+    async def worker(worker_id: int, api_key: str):
+        nonlocal produced_in_this_run, topic_index, successful_count
         
-        current_overall_id = total_existing + produced_in_this_run + len(batch_buffer)
-        print(f"\n[Progress: {produced_in_this_run + len(batch_buffer) + 1}/{args.target}] Generating percakapan untuk topik: '{topik}'")
+        worker_model = create_model_instance(model_string, API_BASE_URL, api_key, worker_id)
         
-        target_turns = random.choice([30, 32, 34, 36, 38, 40])
-        
-        state = ConvState(
-            topik=topik,
-            summary=entry.get("summary", ""),
-            task_hint=entry.get("task", ""),
-            tokenizer=tokenizer,
-            min_turns=target_turns,
-            max_turns=target_turns,
-            min_tokens_user=15,
-            min_tokens_assistant=50
-        )
-        
-        max_api_retries = 3
-        success = False
-        
-        for attempt in range(max_api_retries):
-            try:
-                # Tambahan throttling kecil per percakapan (2 detik)
-                await asyncio.sleep(2)
-                
-                result = await agent.run("Silakan mulai membangun percakapan dari awal. Ingat untuk menggunakan Enum TaskType dengan benar.", deps=state)
-                
-                final_output = cast(ConversationResult, result.output)
-                if final_output.is_valid and len(state.turns) >= state.min_turns:
-                    final_conv = [{"role": "system", "content": SYSTEM_PROMPT}] + state.turns
-                    total_tok = sum(state.get_token_count(t["content"]) for t in state.turns)
-                    
-                    # Kalkulasi Statistik Data
-                    user_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "user"]
-                    asst_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "assistant"]
-                    
-                    prefix_usage = {}
-                    for t in state.turns:
-                        if t["role"] == "assistant":
-                            prefixes = re.findall(r"<unused\d+>", t["content"])
-                            for p in prefixes:
-                                prefix_usage[p] = prefix_usage.get(p, 0) + 1
-                    
-                    stats = {
-                        "avg_turn_tokens": round(total_tok / len(state.turns) if state.turns else 0, 1),
-                        "min_user_tokens": min(user_tokens) if user_tokens else 0,
-                        "max_user_tokens": max(user_tokens) if user_tokens else 0,
-                        "avg_user_tokens": round(sum(user_tokens) / len(user_tokens) if user_tokens else 0, 1),
-                        "min_asst_tokens": min(asst_tokens) if asst_tokens else 0,
-                        "max_asst_tokens": max(asst_tokens) if asst_tokens else 0,
-                        "avg_asst_tokens": round(sum(asst_tokens) / len(asst_tokens) if asst_tokens else 0, 1),
-                        "prefix_usage": prefix_usage
-                    }
-                    
-                    entry_out = {
-                        "id": 90000 + current_overall_id,
-                        "topic_id": entry.get("id", None),
-                        "topik": topik,
-                        "topik_summary": entry.get("summary", ""),
-                        "task_hint": entry.get("task", ""),
-                        "num_turns": len(final_conv),
-                        "tokens": total_tok,
-                        "stats": stats,
-                        "rationale": final_output.rationale,
-                        "conversations": final_conv
-                    }
-                    
-                    batch_buffer.append(entry_out)
-                    print(f"  ✓ BERHASIL GENERATE: {len(state.turns)} turns, {total_tok} tokens. (Di buffer: {len(batch_buffer)}/50)")
-                    success = True
-                else:
-                    print(f"  ✗ GAGAL LOGIKA AGEN: (Turns: {len(state.turns)}). Rationale: {final_output.rationale}")
-                
-                # Jika sukses atau gagal logika (bukan error API), break dari retry loop
-                break
-                
-            except Exception as e:
-                err_msg = str(e)
-                if "429" in err_msg or "rate limit" in err_msg.lower():
-                    wait_time = (attempt + 1) * 30  # Tunggu 30 detik, lalu 60 detik
-                    print(f"  [!] Terkena Rate Limit (429) pada Percobaan {attempt+1}/{max_api_retries}. Menunggu {wait_time} detik...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    print(f"  [!] ERROR API/Sistem pada Percobaan {attempt+1}/{max_api_retries}: {e}")
-                    await asyncio.sleep(5)
-        
-        # Jika gagal total setelah retries, skip topik ini dan biarkan lanjut ke topik berikutnya
-        if not success:
-            print(f"  [!] Topik '{topik}' gagal dibuat setelah {max_api_retries} percobaan. Dilewati (skipping)...")
-            continue
-
-        # Jika buffer sudah penuh 50 percakapan, tulis ke JSONL
-        if len(batch_buffer) == 50:
-            OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with OUTPUT_FILE.open("a", encoding="utf-8") as f:
-                for item in batch_buffer:
-                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        while True:
+            async with success_lock:
+                if successful_count >= args.target:
+                    break
             
-            produced_in_this_run += 50
-            batch_buffer.clear()
-            print(f"\n==================================================")
-            print(f"✓ BERHASIL MENULIS BATCH 50 PERCAKAPAN KE FILE!")
-            print(f"Total yang ditulis pada sesi ini: {produced_in_this_run}")
-            print(f"Total data di file output saat ini: {total_existing + produced_in_this_run}")
-            print(f"==================================================\n")
+            async with topic_lock:
+                if topic_index >= len(unused_topics):
+                    break
+                entry = unused_topics[topic_index]
+                topic_index += 1
+                
+            topik = entry.get("topik", "")
+            
+            async with success_lock:
+                current_id = total_existing + successful_count
+                
+            print(f"\n[Worker {worker_id} | Progress: {current_id + 1}/{total_existing + args.target}] Generating percakapan untuk topik: '{topik}'")
+            
+            target_turns = random.choice([30, 32, 34, 36, 38, 40])
+            
+            state = ConvState(
+                topik=topik,
+                summary=entry.get("summary", ""),
+                task_hint=entry.get("task", ""),
+                tokenizer=tokenizer,
+                min_turns=target_turns,
+                max_turns=target_turns,
+                min_tokens_user=15,
+                min_tokens_assistant=50
+            )
+            
+            max_api_retries = 3
+            success = False
+            
+            for attempt in range(max_api_retries):
+                try:
+                    await asyncio.sleep(2)
+                    
+                    with agent.override(model=worker_model):
+                        result = await agent.run(
+                            "Silakan mulai membangun percakapan dari awal. Ingat untuk menggunakan Enum TaskType dengan benar.", 
+                            deps=state
+                        )
+                    
+                    final_output = cast(ConversationResult, result.output)
+                    if final_output.is_valid and len(state.turns) >= state.min_turns:
+                        final_conv = [{"role": "system", "content": SYSTEM_PROMPT}] + state.turns
+                        total_tok = sum(state.get_token_count(t["content"]) for t in state.turns)
+                        
+                        user_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "user"]
+                        asst_tokens = [state.get_token_count(t["content"]) for t in state.turns if t["role"] == "assistant"]
+                        
+                        prefix_usage = {}
+                        for t in state.turns:
+                            if t["role"] == "assistant":
+                                prefixes = re.findall(r"<unused\d+>", t["content"])
+                                for p in prefixes:
+                                    prefix_usage[p] = prefix_usage.get(p, 0) + 1
+                        
+                        stats = {
+                            "avg_turn_tokens": round(total_tok / len(state.turns) if state.turns else 0, 1),
+                            "min_user_tokens": min(user_tokens) if user_tokens else 0,
+                            "max_user_tokens": max(user_tokens) if user_tokens else 0,
+                            "avg_user_tokens": round(sum(user_tokens) / len(user_tokens) if user_tokens else 0, 1),
+                            "min_asst_tokens": min(asst_tokens) if asst_tokens else 0,
+                            "max_asst_tokens": max(asst_tokens) if asst_tokens else 0,
+                            "avg_asst_tokens": round(sum(asst_tokens) / len(asst_tokens) if asst_tokens else 0, 1),
+                            "prefix_usage": prefix_usage
+                        }
+                        
+                        async with write_lock:
+                            actual_id = 90000 + total_existing + successful_count
+                            entry_out = {
+                                "id": actual_id,
+                                "topic_id": entry.get("id", None),
+                                "topik": topik,
+                                "topik_summary": entry.get("summary", ""),
+                                "task_hint": entry.get("task", ""),
+                                "num_turns": len(final_conv),
+                                "tokens": total_tok,
+                                "stats": stats,
+                                "rationale": final_output.rationale,
+                                "conversations": final_conv
+                            }
+                            
+                            batch_buffer.append(entry_out)
+                            successful_count += 1
+                            
+                            print(f"  ✓ [Worker {worker_id}] BERHASIL GENERATE: {len(state.turns)} turns, {total_tok} tokens. (Di buffer: {len(batch_buffer)}/50)")
+                            
+                            if len(batch_buffer) == 50:
+                                OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+                                with OUTPUT_FILE.open("a", encoding="utf-8") as f:
+                                    for item in batch_buffer:
+                                        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                                produced_in_this_run += 50
+                                batch_buffer.clear()
+                                print(f"\n==================================================")
+                                print(f"✓ BERHASIL MENULIS BATCH 50 PERCAKAPAN KE FILE!")
+                                print(f"Total yang ditulis pada sesi ini: {produced_in_this_run}")
+                                print(f"Total data di file output saat ini: {total_existing + produced_in_this_run}")
+                                print(f"==================================================\n")
+                        
+                        success = True
+                    else:
+                        print(f"  ✗ [Worker {worker_id}] GAGAL LOGIKA AGEN: (Turns: {len(state.turns)}). Rationale: {final_output.rationale}")
+                    
+                    break
+                    
+                except Exception as e:
+                    err_msg = str(e)
+                    if "429" in err_msg or "rate limit" in err_msg.lower():
+                        wait_time = (attempt + 1) * 30
+                        print(f"  [!] [Worker {worker_id}] Terkena Rate Limit (429) pada Percobaan {attempt+1}/{max_api_retries}. Menunggu {wait_time} detik...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        print(f"  [!] [Worker {worker_id}] ERROR API/Sistem pada Percobaan {attempt+1}/{max_api_retries}: {e}")
+                        await asyncio.sleep(5)
+            
+            if not success:
+                print(f"  [!] [Worker {worker_id}] Topik '{topik}' gagal dibuat setelah {max_api_retries} percobaan. Dilewati (skipping)...")
+
+    # Run workers
+    worker_tasks = []
+    for w_id in range(num_workers):
+        api_key = API_KEYS[w_id % len(API_KEYS)]
+        worker_tasks.append(worker(w_id + 1, api_key))
+        
+    await asyncio.gather(*worker_tasks)
 
     # Jika script selesai tapi buffer belum genap 50
     if len(batch_buffer) > 0:

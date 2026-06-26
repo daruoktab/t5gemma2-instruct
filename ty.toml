@@ -1,0 +1,5 @@
+[environment]
+extra-paths = [
+    "D:/Codings/unsloth-fork",
+    "D:/Codings/unsloth-zoo-fork"
+]

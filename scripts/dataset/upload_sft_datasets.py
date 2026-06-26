@@ -60,8 +60,8 @@ def main():
     push_sft_dataset(
         repo_id=REPO_ID,
         config_name="chat_sft",
-        train_file="data/chat_train.jsonl",
-        val_file="data/chat_val.jsonl"
+        train_file="data/chat_train_v2.jsonl",
+        val_file="data/chat_val_v2.jsonl"
     )
     
     # 2. Pushing IndoQA SFT (Flattened)

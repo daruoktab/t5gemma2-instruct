@@ -65,11 +65,11 @@ def push_subset(repo_id, config_name, train_file, val_file=None):
 def main():
     REPO_ID = "daruokta/t5gemma2-indonesia-chat-formatted"
     
-    # 1. Chat Multiturn (2500 Curated Synthetic Data)
+    # 1. Chat Multiturn (3000 Curated Synthetic Data)
     push_subset(
         repo_id=REPO_ID, 
         config_name="chat_multiturn", 
-        train_file="data/t5-gemma-2-chat-instruct-merged.jsonl"
+        train_file="data/t5-gemma-2-chat-instruct-dataset-v2.jsonl"
     )
 
     
