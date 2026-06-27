@@ -21,7 +21,7 @@ TOKENIZER_DIR = DATA_DIR / "tokenizernya-t5gemma2"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from flatten_conversations_jsonl_to_sft import (
+from flatten_conversations_jsonl_to_sft import (  # type: ignore
     conversations_to_sft_rows,
     default_system_prompt,
 )
