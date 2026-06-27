@@ -1,29 +1,3 @@
-{
-  "do_convert_rgb": null,
-  "do_normalize": true,
-  "do_pan_and_scan": null,
-  "do_rescale": true,
-  "do_resize": true,
-  "image_mean": [
-    0.5,
-    0.5,
-    0.5
-  ],
-  "image_processor_type": "Gemma3ImageProcessor",
-  "image_seq_length": 256,
-  "image_std": [
-    0.5,
-    0.5,
-    0.5
-  ],
-  "pan_and_scan_max_num_crops": null,
-  "pan_and_scan_min_crop_size": null,
-  "pan_and_scan_min_ratio_to_activate": null,
-  "processor_class": "Gemma3Processor",
-  "resample": 2,
-  "rescale_factor": 0.00392156862745098,
-  "size": {
-    "height": 896,
-    "width": 896
-  }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:f688d6bb20c5017601c4011de7ca656da8485b540b05013efdaf986c0fcc918d
+size 570
