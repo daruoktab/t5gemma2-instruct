@@ -470,7 +470,6 @@ class SampleGenerationCallback(TrainerCallback):
                 temperature=self.temperature,
                 top_p=self.top_p,
                 repetition_penalty=self.repetition_penalty,
-                no_repeat_ngram_size=3,
                 eos_token_id=self._stop_ids,
                 pad_token_id=pad_id,
                 bad_words_ids=self.bad_words_ids,

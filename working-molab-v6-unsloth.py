@@ -241,7 +241,8 @@ def _(torch):
     # BASIC TRAINING SPECS
     MAX_SOURCE_LENGTH = 16384
     MAX_TARGET_LENGTH = 2048
-    NUM_EPOCHS = 4
+    NUM_EPOCHS_SFT = 4
+    NUM_EPOCHS_ORPO = 2
     LEARNING_RATE = 1e-5
 
     # BATCH SIZE & ACCUMULATION
@@ -321,7 +322,8 @@ def _(torch):
         MAX_TARGET_LENGTH,
         MODEL_NAME,
         NEFTUNE_NOISE_ALPHA,
-        NUM_EPOCHS,
+        NUM_EPOCHS_ORPO,
+        NUM_EPOCHS_SFT,
         OPTIM,
         ORPO_BETA,
         ORPO_CONFIG,
@@ -751,7 +753,6 @@ def _(
                         temperature=self.temperature,
                         top_p=self.top_p,
                         repetition_penalty=self.repetition_penalty,
-                        no_repeat_ngram_size=3,
                         eos_token_id=self._stop_ids,
                         pad_token_id=pad_id,
                         bad_words_ids=self.bad_words_ids,
@@ -1016,7 +1017,8 @@ def _(
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print(f"Loading Tokenizer from {MODEL_NAME}...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    _token = os.environ.get("HF_TOKEN")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=_token, trust_remote_code=True)
     assert isinstance(tokenizer, PreTrainedTokenizerFast), (
         "Tokenizer harus PreTrainedTokenizerFast"
     )
@@ -1136,6 +1138,7 @@ def _(
             max_seq_length=MAX_SOURCE_LENGTH,
             load_in_4bit=LOAD_IN_4BIT,
             trust_remote_code=True,
+            token=os.environ.get("HF_TOKEN"),
         )
     else:
         # SFT: Load base model
@@ -1145,6 +1148,7 @@ def _(
             max_seq_length=MAX_SOURCE_LENGTH,
             load_in_4bit=LOAD_IN_4BIT,
             trust_remote_code=True,
+            token=os.environ.get("HF_TOKEN"),
         )
 
     if model is not None:
@@ -1166,17 +1170,20 @@ def _(
         apply_logit_mask(model, ALL_SUPPRESS_IDS)
 
         # LoRA Config
-        print("Applying LoRA using Unsloth...")
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=LORA_RANK,
-            lora_alpha=LORA_ALPHA,
-            target_modules=LORA_TARGET_MODULES,
-            lora_dropout=LORA_DROPOUT,
-            bias="none",
-            use_gradient_checkpointing="unsloth",
-            random_state=3407,
-        )
+        if hasattr(model, "peft_config"):
+            print("Model is already a PEFT model (loaded SFT adapter). Skipping get_peft_model.")
+        else:
+            print("Applying LoRA using Unsloth...")
+            model = FastLanguageModel.get_peft_model(
+                model,
+                r=LORA_RANK,
+                lora_alpha=LORA_ALPHA,
+                target_modules=LORA_TARGET_MODULES,
+                lora_dropout=LORA_DROPOUT,
+                bias="none",
+                use_gradient_checkpointing="unsloth",
+                random_state=3407,
+            )
 
         getattr(FastLanguageModel, "for_training")(model)
         model.config.use_cache = False
@@ -1316,7 +1323,8 @@ def _(
     LR_SCHEDULER_TYPE,
     MAX_TARGET_LENGTH,
     NEFTUNE_NOISE_ALPHA,
-    NUM_EPOCHS,
+    NUM_EPOCHS_ORPO,
+    NUM_EPOCHS_SFT,
     OPTIM,
     ORPO_BETA,
     OUTPUT_DIR,
@@ -1681,7 +1689,7 @@ def _(
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         eval_accumulation_steps=EVAL_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
-        num_train_epochs=NUM_EPOCHS,
+        num_train_epochs=NUM_EPOCHS_ORPO if is_orpo_training else NUM_EPOCHS_SFT,
         warmup_steps=WARMUP_STEPS,
         weight_decay=WEIGHT_DECAY,
         lr_scheduler_type=LR_SCHEDULER_TYPE,
@@ -1715,7 +1723,7 @@ def _(
     num_update_steps_per_epoch = max(
         1, len(train_ds) // (PER_DEVICE_TRAIN_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS)
     )
-    max_steps = num_update_steps_per_epoch * NUM_EPOCHS
+    max_steps = num_update_steps_per_epoch * (NUM_EPOCHS_ORPO if is_orpo_training else NUM_EPOCHS_SFT)
 
     lr_scheduler = get_scheduler(
         name=LR_SCHEDULER_TYPE,
@@ -1746,11 +1754,24 @@ def _(
     if resume_checkpoint:
         try:
             from huggingface_hub import snapshot_download as _resume_snap
-            print(f"\n📥 Downloading {current_stage} checkpoints dari HF untuk resume...")
+            from huggingface_hub import HfApi as _ResumeApi
+            
+            _api = _ResumeApi(token=_hf_token)
+            _files = _api.list_repo_files(repo_id=HF_CHECKPOINT_REPO)
+            
+            # Cari checkpoint terbaru biar gak download semuanya dan bikin storage penuh
+            _ckpts = list(set([f.split('/')[1] for f in _files if f.startswith(f"{current_stage}/checkpoint-")]))
+            if _ckpts:
+                _ckpts.sort(key=lambda x: int(x.split('-')[1]))
+                _latest_ckpt = _ckpts[-1]
+            else:
+                _latest_ckpt = "checkpoint-*"
+                
+            print(f"\n📥 Downloading {_latest_ckpt} ({current_stage}) dari HF untuk resume...")
             _resume_snap(
                 repo_id=HF_CHECKPOINT_REPO,
                 local_dir=active_output_dir,
-                allow_patterns=[f"{current_stage}/checkpoint-*/**"],
+                allow_patterns=[f"{current_stage}/{_latest_ckpt}/**"],
                 token=_hf_token,
             )
             # Pindahkan dari subfolder ke root output dir jika perlu
@@ -1861,14 +1882,14 @@ def _(
         print("✅ Model BF16 berhasil disimpan.")
 
         print("\nMerging LoRA adapter and saving model as 4-bit NF4 using Unsloth...")
-        model.save_pretrained_merged(quantized_4bit_path, tokenizer, save_method="merged_4bit")
+        model.save_pretrained_merged(quantized_4bit_path, tokenizer, save_method="merged_4bit_forced")
         print("✅ Model 4-bit NF4 berhasil disimpan!")
 
         return None
 
     upload_dir = os.path.join(OUTPUT_DIR, "hf_upload")
 
-    # merge_and_quantize(model, tokenizer, upload_dir)
+    merge_and_quantize(model, tokenizer, upload_dir)
     return merge_and_quantize, upload_dir
 
 

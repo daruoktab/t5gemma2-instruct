@@ -1,6 +1,7 @@
 # Ignore raw images and PDFs
-images/*.png
+images/
 raw_pdfs/
 
-# Ignore the active generation file for now as requested
+# Ignore active generation output files
 train_vision_conv.jsonl
+train_vision.jsonl

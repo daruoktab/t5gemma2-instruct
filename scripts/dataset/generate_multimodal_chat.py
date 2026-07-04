@@ -19,8 +19,8 @@ load_dotenv()
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 IMAGE_DIR = ROOT_DIR / "data" / "multimodal" / "images"
-METADATA_FILE = IMAGE_DIR / "random_metadata.json"
-DOC_METADATA_FILE = IMAGE_DIR / "doc_metadata.json"
+METADATA_FILE = ROOT_DIR / "data" / "multimodal" / "metadata" / "random_metadata.json"
+DOC_METADATA_FILE = ROOT_DIR / "data" / "multimodal" / "metadata" / "doc_metadata.json"
 OUTPUT_FILE = ROOT_DIR / "data" / "multimodal" / "train_vision.jsonl"
 
 SYSTEM_PROMPT = (
@@ -274,11 +274,11 @@ def main():
         print(f"[ERROR] Folder gambar {IMAGE_DIR} tidak ditemukan. Silakan jalankan scraper dan downloader terlebih dahulu.")
         sys.exit(1)
         
-    random_images = sorted(list(IMAGE_DIR.glob("random_*.png")), key=lambda x: x.name)
+    random_images = sorted(list((IMAGE_DIR / "general").glob("random_*.png")), key=lambda x: x.name)
     
     # Kelompokkan berkas gambar dokumen berdasarkan PDF asal
     doc_groups = {}
-    for img_path in IMAGE_DIR.glob("doc_scraped_*_page_*.png"):
+    for img_path in (IMAGE_DIR / "documents").glob("doc_scraped_*_page_*.png"):
         m = re.match(r"doc_scraped_(\d+)_page_(\d+)\.png", img_path.name)
         if m:
             pdf_idx = int(m.group(1))
@@ -365,7 +365,7 @@ def main():
             current_id = total_existing + idx + 1
             print(f"\n[{current_id}/{target_total}] Memproses {item_key} ({category}) dengan {len(paths)} halaman...")
             
-            relative_paths = [f"data/multimodal/images/{p.name}" for p in paths]
+            relative_paths = [p.relative_to(ROOT_DIR).as_posix() for p in paths]
             
             messages = generate_chat_for_images(client, paths, args.model, image_metadata)
             if messages:

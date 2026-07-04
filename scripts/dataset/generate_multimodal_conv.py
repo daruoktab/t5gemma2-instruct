@@ -18,8 +18,8 @@ from pydantic_ai import Agent, RunContext, BinaryContent
 # ─── Load .env ───────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
-IMAGE_DIR = ROOT_DIR / "data" / "multimodal" / "images"
-METADATA_FILE = IMAGE_DIR / "random_metadata.json"
+IMAGE_DIR = ROOT_DIR / "data" / "multimodal" / "images" / "general"
+METADATA_FILE = ROOT_DIR / "data" / "multimodal" / "metadata" / "random_metadata.json"
 OUTPUT_FILE = ROOT_DIR / "data" / "multimodal" / "train_vision_conv.jsonl"
 
 try:
@@ -42,22 +42,21 @@ class TaskType(str, Enum):
     PARAPHRASE = "<unused5>"
     GENERAL_CHAT = "<unused6>"
 
-# ─── Konfigurasi API (Google GenAI) ──────────────────────────────────────────────
-# Rate limit Gemma di Google AI Studio: 16k TPM per model
-# Dengan estimasi ~2-4k token per agent run, jeda 15-20 detik per request aman
-RATE_LIMIT_DELAY = float(os.environ.get("RATE_LIMIT_DELAY", "2.0"))  # 60s / 30 RPM = 2s per request
-API_MODEL = os.environ.get("GOOGLE_MODEL") or "gemma-4-31b-it"
+# ─── Konfigurasi API (OpenRouter) ──────────────────────────────────────────────
+# Rate limit delay: OpenRouter tidak se-strict Google AI Studio, tapi jeda 2s aman
+RATE_LIMIT_DELAY = float(os.environ.get("RATE_LIMIT_DELAY", "2.0"))  # detik
+API_MODEL = os.environ.get("OPENROUTER_MODEL") or "google/gemma-4-31b-it:free"
 
-# Support multiple API keys: GOOGLE_API_KEY_1/GEMINI_API_KEY_1, dst.
-# Fallback ke GOOGLE_API_KEY atau GEMINI_API_KEY
+# Support multiple API keys: OPENROUTER_API_KEY_1, OPENROUTER_API_KEY_2, dst.
+# Fallback ke OPENROUTER_API_KEY
 def _load_api_keys() -> list[str]:
     keys = []
     for i in range(1, 10):
-        k = os.environ.get(f"GOOGLE_API_KEY_{i}") or os.environ.get(f"GEMINI_API_KEY_{i}")
+        k = os.environ.get(f"OPENROUTER_API_KEY_{i}")
         if k:
             keys.append(k)
     if not keys:
-        single = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+        single = os.environ.get("OPENROUTER_API_KEY", "")
         if single:
             keys.append(single)
     return keys
@@ -128,16 +127,16 @@ class RateLimitedAsyncClient(httpx.AsyncClient):
                 await asyncio.sleep(wait_time)
 
 def create_model_instance(api_key: str, model_name: str):
-    """Buat model instance Google GenAI (Gemma via Google AI Studio)."""
-    from pydantic_ai.models.google import GoogleModel
-    from pydantic_ai.providers.google import GoogleProvider
+    """Buat model instance OpenRouter."""
+    from pydantic_ai.models.openrouter import OpenRouterModel
+    from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-    provider = GoogleProvider(api_key=api_key)
-    return GoogleModel(model_name, provider=provider)
+    provider = OpenRouterProvider(api_key=api_key)
+    return OpenRouterModel(model_name, provider=provider)
 
 # ─── Agent Definition ────────────────────────────────────────────────────────
 # Placeholder model string — akan di-override saat runtime
-model_string = f"google:{API_MODEL}"
+model_string = f"openrouter:{API_MODEL}"
 
 agent = Agent(
     model_string,
@@ -317,7 +316,7 @@ async def main():
     args = parser.parse_args()
 
     num_workers = args.workers
-    print(f"[INFO] Provider          : Google AI Studio (Gemma)")
+    print(f"[INFO] Provider          : OpenRouter")
     print(f"[INFO] Menggunakan Model  : {args.model}")
     print(f"[INFO] Rate Limit Delay  : {RATE_LIMIT_DELAY}s per request")
     print(f"[INFO] Jumlah API Key     : {len(API_KEYS)}")
@@ -423,7 +422,7 @@ async def main():
                 image_index += 1
 
             async with success_lock:
-                current_id = total_existing + success_count + idx + 1
+                current_id = total_existing + idx + 1
 
             target_turns = turn_dist_map[img_path.name]
             print(f"\n[Worker {worker_id} | {current_id}/{target_total}] {img_path.name} ({target_turns} turns)...")
@@ -476,7 +475,7 @@ async def main():
                                 for p in re.findall(r"<unused\d+>", t["content"]):
                                     prefix_usage[p] = prefix_usage.get(p, 0) + 1
 
-                        relative_path = f"data/multimodal/images/{img_path.name}"
+                        relative_path = img_path.relative_to(ROOT_DIR).as_posix()
 
                         async with write_lock:
                             async with success_lock:
@@ -491,8 +490,14 @@ async def main():
                                 "rationale": final_output.rationale,
                                 "messages": final_messages
                             }
+                            # Tulis dengan aman: flush + fsync untuk menjamin data fisik tertulis ke disk
                             with output_path.open("a", encoding="utf-8") as f:
                                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                                f.flush()
+                                try:
+                                    os.fsync(f.fileno())
+                                except OSError:
+                                    pass  # fsync mungkin tidak didukung di beberapa environment virtual/network mount
 
                         success = True
                         print(f"  ✓ [Worker {worker_id}] BERHASIL: {len(state.turns)} turns | prefix: {prefix_usage}")
@@ -501,6 +506,10 @@ async def main():
 
                     break
 
+                except (asyncio.CancelledError, KeyboardInterrupt):
+                    # Jika dicancel atau Ctrl+C, hentikan secara anggun tanpa merusak data
+                    print(f"  [!] [Worker {worker_id}] Proses dibatalkan oleh pengguna/sistem.")
+                    raise
                 except Exception as e:
                     err_msg = str(e)
                     if "429" in err_msg or "rate limit" in err_msg.lower():
