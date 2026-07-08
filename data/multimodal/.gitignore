@@ -1,7 +1,0 @@
-# Ignore raw images and PDFs
-images/
-raw_pdfs/
-
-# Ignore active generation output files
-train_vision_conv.jsonl
-train_vision.jsonl

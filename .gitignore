@@ -21,3 +21,7 @@ skills-lock.json
 .smart-env
 /outputs/
 /unsloth_compiled_cache/
+
+# Multimodal raw data
+/data/multimodal/images/
+/data/multimodal/raw_pdfs/
