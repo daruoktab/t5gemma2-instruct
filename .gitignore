@@ -2,6 +2,7 @@
 /.antigravitycli
 /.env
 /.gemini
+/.mimocode
 __pycache__/
 *.pyc
 /results/
