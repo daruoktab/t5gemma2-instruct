@@ -1,0 +1,899 @@
+Model: T5Gemma2ForConditionalGeneration
+Total params: 786.0M
+
+=== ALL MODULES (name | class | shape) ===
+                                                                       T5Gemma2ForConditionalGeneration   
+model                                                                  T5Gemma2Model                      
+model.encoder                                                          T5Gemma2Encoder                    
+model.encoder.text_model                                               T5Gemma2TextEncoder                
+model.encoder.text_model.embed_tokens                                  T5Gemma2TextScaledWordEmbedding     (262144, 640)
+model.encoder.text_model.norm                                          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers                                        ModuleList                         
+model.encoder.text_model.layers.0                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.0.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.0.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.0.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.0.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.0.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.0.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.0.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.0.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.0.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.0.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.0.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.0.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.0.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.0.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.0.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.1                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.1.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.1.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.1.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.1.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.1.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.1.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.1.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.1.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.1.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.1.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.1.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.1.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.1.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.1.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.1.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.2                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.2.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.2.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.2.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.2.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.2.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.2.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.2.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.2.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.2.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.2.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.2.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.2.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.2.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.2.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.2.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.3                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.3.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.3.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.3.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.3.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.3.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.3.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.3.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.3.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.3.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.3.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.3.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.3.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.3.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.3.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.3.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.4                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.4.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.4.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.4.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.4.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.4.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.4.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.4.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.4.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.4.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.4.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.4.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.4.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.4.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.4.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.4.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.5                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.5.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.5.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.5.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.5.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.5.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.5.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.5.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.5.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.5.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.5.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.5.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.5.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.5.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.5.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.5.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.6                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.6.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.6.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.6.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.6.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.6.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.6.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.6.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.6.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.6.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.6.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.6.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.6.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.6.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.6.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.6.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.7                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.7.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.7.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.7.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.7.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.7.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.7.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.7.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.7.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.7.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.7.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.7.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.7.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.7.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.7.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.7.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.8                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.8.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.8.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.8.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.8.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.8.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.8.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.8.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.8.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.8.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.8.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.8.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.8.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.8.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.8.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.8.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.9                                      T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.9.self_attn                            T5Gemma2SelfAttention              
+model.encoder.text_model.layers.9.self_attn.q_proj                     Linear                              (1024, 640)
+model.encoder.text_model.layers.9.self_attn.k_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.9.self_attn.v_proj                     Linear                              (256, 640)
+model.encoder.text_model.layers.9.self_attn.o_proj                     Linear                              (640, 1024)
+model.encoder.text_model.layers.9.self_attn.q_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.9.self_attn.k_norm                     T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.9.pre_self_attn_layernorm              T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.9.post_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.9.mlp                                  T5Gemma2MLP                        
+model.encoder.text_model.layers.9.mlp.gate_proj                        Linear                              (2048, 640)
+model.encoder.text_model.layers.9.mlp.up_proj                          Linear                              (2048, 640)
+model.encoder.text_model.layers.9.mlp.down_proj                        Linear                              (640, 2048)
+model.encoder.text_model.layers.9.pre_feedforward_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.9.post_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.10                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.10.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.10.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.10.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.10.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.10.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.10.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.10.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.10.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.10.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.10.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.10.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.10.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.10.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.10.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.10.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.11                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.11.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.11.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.11.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.11.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.11.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.11.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.11.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.11.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.11.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.11.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.11.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.11.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.11.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.11.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.11.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.12                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.12.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.12.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.12.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.12.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.12.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.12.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.12.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.12.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.12.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.12.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.12.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.12.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.12.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.12.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.12.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.13                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.13.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.13.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.13.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.13.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.13.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.13.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.13.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.13.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.13.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.13.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.13.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.13.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.13.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.13.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.13.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.14                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.14.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.14.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.14.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.14.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.14.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.14.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.14.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.14.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.14.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.14.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.14.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.14.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.14.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.14.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.14.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.15                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.15.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.15.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.15.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.15.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.15.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.15.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.15.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.15.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.15.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.15.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.15.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.15.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.15.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.15.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.15.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.16                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.16.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.16.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.16.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.16.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.16.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.16.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.16.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.16.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.16.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.16.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.16.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.16.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.16.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.16.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.16.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.17                                     T5Gemma2EncoderLayer               
+model.encoder.text_model.layers.17.self_attn                           T5Gemma2SelfAttention              
+model.encoder.text_model.layers.17.self_attn.q_proj                    Linear                              (1024, 640)
+model.encoder.text_model.layers.17.self_attn.k_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.17.self_attn.v_proj                    Linear                              (256, 640)
+model.encoder.text_model.layers.17.self_attn.o_proj                    Linear                              (640, 1024)
+model.encoder.text_model.layers.17.self_attn.q_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.17.self_attn.k_norm                    T5Gemma2RMSNorm                     (256,)
+model.encoder.text_model.layers.17.pre_self_attn_layernorm             T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.17.post_self_attn_layernorm            T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.17.mlp                                 T5Gemma2MLP                        
+model.encoder.text_model.layers.17.mlp.gate_proj                       Linear                              (2048, 640)
+model.encoder.text_model.layers.17.mlp.up_proj                         Linear                              (2048, 640)
+model.encoder.text_model.layers.17.mlp.down_proj                       Linear                              (640, 2048)
+model.encoder.text_model.layers.17.pre_feedforward_layernorm           T5Gemma2RMSNorm                     (640,)
+model.encoder.text_model.layers.17.post_feedforward_layernorm          T5Gemma2RMSNorm                     (640,)
+model.encoder.vision_tower                                             SiglipVisionModel                  
+model.encoder.vision_tower.embeddings                                  SiglipVisionEmbeddings             
+model.encoder.vision_tower.embeddings.patch_embedding                  Conv2d                              (1152, 3, 14, 14)
+model.encoder.vision_tower.embeddings.position_embedding               Embedding                           (4096, 1152)
+model.encoder.vision_tower.encoder                                     SiglipEncoder                      
+model.encoder.vision_tower.encoder.layers                              ModuleList                         
+model.encoder.vision_tower.encoder.layers.0                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.0.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.0.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.0.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.0.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.0.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.0.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.0.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.0.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.0.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.0.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.1                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.1.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.1.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.1.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.1.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.1.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.1.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.1.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.1.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.1.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.1.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.2                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.2.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.2.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.2.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.2.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.2.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.2.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.2.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.2.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.2.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.2.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.3                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.3.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.3.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.3.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.3.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.3.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.3.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.3.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.3.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.3.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.3.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.4                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.4.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.4.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.4.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.4.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.4.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.4.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.4.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.4.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.4.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.4.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.5                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.5.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.5.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.5.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.5.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.5.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.5.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.5.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.5.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.5.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.5.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.6                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.6.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.6.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.6.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.6.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.6.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.6.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.6.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.6.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.6.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.6.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.7                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.7.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.7.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.7.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.7.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.7.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.7.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.7.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.7.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.7.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.7.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.8                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.8.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.8.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.8.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.8.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.8.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.8.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.8.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.8.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.8.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.8.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.9                            SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.9.layer_norm1                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.9.self_attn                  SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.9.self_attn.k_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.9.self_attn.v_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.9.self_attn.q_proj           Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.9.self_attn.out_proj         Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.9.layer_norm2                LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.9.mlp                        SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.9.mlp.fc1                    Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.9.mlp.fc2                    Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.10                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.10.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.10.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.10.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.10.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.10.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.10.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.10.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.10.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.10.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.10.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.11                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.11.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.11.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.11.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.11.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.11.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.11.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.11.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.11.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.11.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.11.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.12                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.12.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.12.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.12.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.12.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.12.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.12.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.12.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.12.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.12.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.12.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.13                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.13.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.13.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.13.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.13.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.13.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.13.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.13.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.13.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.13.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.13.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.14                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.14.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.14.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.14.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.14.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.14.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.14.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.14.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.14.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.14.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.14.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.15                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.15.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.15.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.15.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.15.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.15.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.15.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.15.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.15.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.15.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.15.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.16                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.16.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.16.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.16.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.16.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.16.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.16.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.16.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.16.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.16.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.16.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.17                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.17.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.17.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.17.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.17.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.17.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.17.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.17.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.17.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.17.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.17.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.18                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.18.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.18.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.18.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.18.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.18.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.18.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.18.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.18.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.18.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.18.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.19                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.19.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.19.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.19.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.19.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.19.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.19.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.19.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.19.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.19.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.19.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.20                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.20.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.20.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.20.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.20.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.20.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.20.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.20.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.20.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.20.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.20.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.21                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.21.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.21.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.21.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.21.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.21.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.21.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.21.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.21.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.21.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.21.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.22                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.22.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.22.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.22.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.22.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.22.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.22.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.22.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.22.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.22.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.22.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.23                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.23.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.23.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.23.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.23.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.23.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.23.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.23.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.23.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.23.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.23.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.24                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.24.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.24.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.24.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.24.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.24.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.24.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.24.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.24.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.24.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.24.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.25                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.25.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.25.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.25.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.25.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.25.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.25.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.25.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.25.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.25.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.25.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.encoder.layers.26                           SiglipEncoderLayer                 
+model.encoder.vision_tower.encoder.layers.26.layer_norm1               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.26.self_attn                 SiglipAttention                    
+model.encoder.vision_tower.encoder.layers.26.self_attn.k_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.26.self_attn.v_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.26.self_attn.q_proj          Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.26.self_attn.out_proj        Linear                              (1152, 1152)
+model.encoder.vision_tower.encoder.layers.26.layer_norm2               LayerNorm                           (1152,)
+model.encoder.vision_tower.encoder.layers.26.mlp                       SiglipMLP                          
+model.encoder.vision_tower.encoder.layers.26.mlp.fc1                   Linear                              (4304, 1152)
+model.encoder.vision_tower.encoder.layers.26.mlp.fc2                   Linear                              (1152, 4304)
+model.encoder.vision_tower.post_layernorm                              LayerNorm                           (1152,)
+model.encoder.multi_modal_projector                                    T5Gemma2MultiModalProjector        
+model.encoder.multi_modal_projector.mm_soft_emb_norm                   T5Gemma2RMSNorm                     (1152,)
+model.decoder                                                          T5Gemma2Decoder                    
+model.decoder.embed_tokens                                             T5Gemma2TextScaledWordEmbedding     (262144, 640)
+model.decoder.norm                                                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers                                                   ModuleList                         
+model.decoder.layers.0                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.0.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.0.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.0.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.0.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.0.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.0.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.0.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.0.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.0.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.0.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.0.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.0.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.0.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.0.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.0.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.1                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.1.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.1.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.1.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.1.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.1.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.1.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.1.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.1.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.1.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.1.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.1.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.1.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.1.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.1.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.1.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.2                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.2.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.2.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.2.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.2.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.2.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.2.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.2.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.2.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.2.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.2.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.2.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.2.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.2.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.2.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.2.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.3                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.3.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.3.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.3.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.3.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.3.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.3.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.3.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.3.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.3.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.3.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.3.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.3.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.3.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.3.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.3.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.4                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.4.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.4.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.4.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.4.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.4.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.4.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.4.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.4.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.4.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.4.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.4.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.4.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.4.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.4.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.4.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.5                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.5.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.5.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.5.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.5.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.5.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.5.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.5.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.5.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.5.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.5.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.5.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.5.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.5.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.5.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.5.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.6                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.6.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.6.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.6.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.6.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.6.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.6.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.6.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.6.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.6.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.6.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.6.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.6.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.6.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.6.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.6.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.7                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.7.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.7.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.7.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.7.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.7.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.7.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.7.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.7.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.7.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.7.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.7.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.7.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.7.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.7.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.7.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.8                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.8.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.8.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.8.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.8.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.8.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.8.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.8.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.8.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.8.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.8.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.8.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.8.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.8.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.8.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.8.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.9                                                 T5Gemma2DecoderLayer               
+model.decoder.layers.9.self_attn                                       T5Gemma2MergedAttention            
+model.decoder.layers.9.self_attn.q_proj                                Linear                              (1024, 640)
+model.decoder.layers.9.self_attn.k_proj                                Linear                              (256, 640)
+model.decoder.layers.9.self_attn.v_proj                                Linear                              (256, 640)
+model.decoder.layers.9.self_attn.o_proj                                Linear                              (640, 1024)
+model.decoder.layers.9.self_attn.q_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.9.self_attn.k_norm                                T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.9.pre_self_attn_layernorm                         T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.9.post_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.9.mlp                                             T5Gemma2MLP                        
+model.decoder.layers.9.mlp.gate_proj                                   Linear                              (2048, 640)
+model.decoder.layers.9.mlp.up_proj                                     Linear                              (2048, 640)
+model.decoder.layers.9.mlp.down_proj                                   Linear                              (640, 2048)
+model.decoder.layers.9.pre_feedforward_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.9.post_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.10                                                T5Gemma2DecoderLayer               
+model.decoder.layers.10.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.10.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.10.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.10.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.10.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.10.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.10.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.10.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.10.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.10.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.10.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.10.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.10.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.10.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.10.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.11                                                T5Gemma2DecoderLayer               
+model.decoder.layers.11.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.11.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.11.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.11.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.11.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.11.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.11.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.11.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.11.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.11.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.11.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.11.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.11.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.11.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.11.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.12                                                T5Gemma2DecoderLayer               
+model.decoder.layers.12.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.12.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.12.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.12.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.12.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.12.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.12.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.12.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.12.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.12.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.12.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.12.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.12.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.12.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.12.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.13                                                T5Gemma2DecoderLayer               
+model.decoder.layers.13.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.13.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.13.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.13.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.13.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.13.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.13.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.13.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.13.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.13.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.13.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.13.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.13.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.13.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.13.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.14                                                T5Gemma2DecoderLayer               
+model.decoder.layers.14.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.14.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.14.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.14.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.14.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.14.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.14.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.14.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.14.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.14.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.14.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.14.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.14.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.14.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.14.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.15                                                T5Gemma2DecoderLayer               
+model.decoder.layers.15.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.15.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.15.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.15.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.15.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.15.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.15.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.15.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.15.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.15.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.15.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.15.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.15.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.15.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.15.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.16                                                T5Gemma2DecoderLayer               
+model.decoder.layers.16.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.16.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.16.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.16.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.16.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.16.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.16.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.16.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.16.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.16.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.16.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.16.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.16.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.16.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.16.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.17                                                T5Gemma2DecoderLayer               
+model.decoder.layers.17.self_attn                                      T5Gemma2MergedAttention            
+model.decoder.layers.17.self_attn.q_proj                               Linear                              (1024, 640)
+model.decoder.layers.17.self_attn.k_proj                               Linear                              (256, 640)
+model.decoder.layers.17.self_attn.v_proj                               Linear                              (256, 640)
+model.decoder.layers.17.self_attn.o_proj                               Linear                              (640, 1024)
+model.decoder.layers.17.self_attn.q_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.17.self_attn.k_norm                               T5Gemma2RMSNorm                     (256,)
+model.decoder.layers.17.pre_self_attn_layernorm                        T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.17.post_self_attn_layernorm                       T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.17.mlp                                            T5Gemma2MLP                        
+model.decoder.layers.17.mlp.gate_proj                                  Linear                              (2048, 640)
+model.decoder.layers.17.mlp.up_proj                                    Linear                              (2048, 640)
+model.decoder.layers.17.mlp.down_proj                                  Linear                              (640, 2048)
+model.decoder.layers.17.pre_feedforward_layernorm                      T5Gemma2RMSNorm                     (640,)
+model.decoder.layers.17.post_feedforward_layernorm                     T5Gemma2RMSNorm                     (640,)
+lm_head                                                                T5Gemma2LMHead                     
+lm_head.out_proj                                                       Linear                              (262144, 640)

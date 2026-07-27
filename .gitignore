@@ -26,3 +26,10 @@ skills-lock.json
 # Multimodal raw data
 /data/multimodal/images/
 /data/multimodal/raw_pdfs/
+
+# Large model binaries (gguf > GitHub 100MB limit)
+*.gguf
+
+# Agent tooling configs (may contain API keys)
+opencode.json
+/.commandcode/
