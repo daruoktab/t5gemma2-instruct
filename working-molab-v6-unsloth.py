@@ -192,13 +192,6 @@ def _(hf_token_input, mo, os):
     return
 
 
-@app.cell
-def _():
-    # Install library yang diperlukan (uncomment jika dijalankan di Google Colab atau environment baru)
-    # !pip install -q transformers datasets peft accelerate matplotlib ipywidgets unsloth_zoo unsloth -U
-    return
-
-
 # =====================================================================
 # KONFIGURASI HYPERPARAMETER (TERPUSAT & MUDAH DIUBAH)
 # =====================================================================
@@ -1895,42 +1888,40 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-        ### 💻 Local Deployment & Inference (Direct Load from Hugging Face Hub Subfolders)
-        Setelah model diunggah ke Hugging Face Hub, repositori Anda akan memiliki struktur:
-        - `sft/` — Checkpoint dan artifacts SFT training
-        - `orpo/` — Checkpoint dan artifacts ORPO training
-        - `merged_bf16/` — Model gabungan utuh (bfloat16, ~15 GB)
-        - `quantized_4bit/` — Model terkuantisasi (NF4, ~5 GB)
+    mo.md(r"""
+    ### 💻 Local Deployment & Inference (Direct Load from Hugging Face Hub Subfolders)
+    Setelah model diunggah ke Hugging Face Hub, repositori Anda akan memiliki struktur:
+    - `sft/` — Checkpoint dan artifacts SFT training
+    - `orpo/` — Checkpoint dan artifacts ORPO training
+    - `merged_bf16/` — Model gabungan utuh (bfloat16, ~15 GB)
+    - `quantized_4bit/` — Model terkuantisasi (NF4, ~5 GB)
 
-        #### Load Model Quantized 4-bit:
-        ```python
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+    #### Load Model Quantized 4-bit:
+    ```python
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-        model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-unsloth"
+    model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-unsloth"
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="quantized_4bit")
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_id, subfolder="quantized_4bit", device_map="auto"
-        )
-        ```
-
-        #### Load Model Full Precision (BF16):
-        ```python
-        import torch
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-        model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-unsloth"
-
-        tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="merged_bf16")
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_id, subfolder="merged_bf16",
-            torch_dtype=torch.bfloat16, device_map="auto"
-        )
-        ```
-        """
+    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="quantized_4bit")
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_id, subfolder="quantized_4bit", device_map="auto"
     )
+    ```
+
+    #### Load Model Full Precision (BF16):
+    ```python
+    import torch
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+    model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-unsloth"
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="merged_bf16")
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_id, subfolder="merged_bf16",
+        torch_dtype=torch.bfloat16, device_map="auto"
+    )
+    ```
+    """)
     return
 
 

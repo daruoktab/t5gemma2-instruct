@@ -146,10 +146,10 @@ def _():
         if model is not None:
             return model
         return lambda fn: fn
-    torch.compile = _torch_compile_noop  # type: ignore[assignment]
+    setattr(torch, "compile", _torch_compile_noop)
     import torch.nn.functional as F
-    torch._dynamo.config.recompile_limit = 1024  # type: ignore[assignment]
-    torch._dynamo.config.cache_size_limit = 1024  # type: ignore[assignment]
+    setattr(torch._dynamo.config, "recompile_limit", 1024)
+    setattr(torch._dynamo.config, "cache_size_limit", 1024)
     from PIL import Image
     from unsloth import FastVisionModel
     from datasets import Dataset, load_dataset
@@ -452,23 +452,14 @@ def _(Image, os):
                 new_messages.append({"role": role, "content": [{"type": "text", "text": content}]})
         merged_messages = []
         for msg in new_messages:
-            if merged_messages and merged_messages[-1]["role"] == msg["role"]:
-                last_msg = merged_messages[-1]
-                last_content = last_msg["content"]
-                current_content = msg["content"]
-                merged_content = []
-                merged_content.extend(last_content)
-                for block in current_content:
-                    if isinstance(block, dict) and block.get("type") == "text" and merged_content and isinstance(merged_content[-1], dict) and merged_content[-1].get("type") == "text":
-                        last_block = dict(merged_content[-1])
-                        last_block["text"] = str(last_block.get("text", "")) + "\n" + str(block.get("text", ""))
-                        merged_content[-1] = last_block
-                    else:
-                        merged_content.append(block)
-                last_msg["content"] = merged_content  # type: ignore
-
+            msg_role = msg["role"]
+            msg_content = msg["content"]
+            if merged_messages and merged_messages[-1]["role"] == msg_role:
+                last_msg = merged_messages.pop()
+                merged_content = list(last_msg["content"]) + list(msg_content)
+                merged_messages.append({"role": msg_role, "content": merged_content})
             else:
-                merged_messages.append(msg)
+                merged_messages.append({"role": msg_role, "content": list(msg_content)})
         return merged_messages
 
     def format_encoder_from_raw(raw_input: str) -> str:
@@ -527,7 +518,7 @@ def _(F, Seq2SeqTrainer, torch):
                 images = None
                 if "images" in item and item["images"]:
                     images = item["images"]
-                elif "dataset_idx" in item and self.train_dataset is not None:
+                elif "dataset_idx" in item and item["dataset_idx"] >= 0 and self.train_dataset is not None:
                     try:
                         full_images = self.train_dataset[item["dataset_idx"]]["images"]
                         indices = item.get("image_indices", [])
@@ -1485,7 +1476,7 @@ def _(torch):
     SUBFOLDER = ""  # repo cangkok langsung di root (tidak ada subfolder)
     LOAD_IN_4BIT = True
     OUTPUT_DIR = "results/t5gemma2_vision"
-    HF_CHECKPOINT_REPO = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-vision"
+    HF_CHECKPOINT_REPO = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-vision-enhanced"
 
     # Dataset JSONL lokal
     JSONL_DATASET_PATH = "data/multimodal/train_vision.jsonl"
@@ -1512,7 +1503,7 @@ def _(torch):
     PER_DEVICE_TRAIN_BATCH_SIZE = 2
     GRADIENT_ACCUMULATION_STEPS = 32
     WARMUP_STEPS = 100
-    WEIGHT_DECAY = 0.01
+    WEIGHT_DECAY = 0.1
     LR_SCHEDULER_TYPE = "cosine"
     LOGGING_STEPS = 10
     SAVE_TOTAL_LIMIT = 2
@@ -1831,8 +1822,64 @@ def _(
                     "dataset_idx": _idx_sft,
                     "image_indices": list(range(_num_context_images))
                 })
+    print(f"✅ Vision SFT samples unrolled: {len(sft_formatted)} samples.")
+
+    # Load and format text retention data to prevent catastrophic forgetting
+    # Select complete conversations by chat_idx so turns are never cut off in the middle
+    print("Memuat text retention dataset (100 percakapan utuh chat_sft + 100 IndoQA)...")
+    _text_retention_formatted = []
+    try:
+        _ret_chat_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "chat_sft", split="train")
+        _ret_indoqa_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "indoqa_sft", split="train")
+
+        _chat_rows = [dict(_r) for _r in _ret_chat_ds]
+        _indoqa_rows = [dict(_r) for _r in _ret_indoqa_ds]
+
+        import random as _rng_ret
+        _rng_ret.seed(SEED)
+
+        # Group chat_sft rows by chat_idx to keep multiturn conversations intact
+        _chat_groups = {}
+        for _r in _chat_rows:
+            _c_idx = _r.get("chat_idx", _r.get("id"))
+            if _c_idx not in _chat_groups:
+                _chat_groups[_c_idx] = []
+            _chat_groups[_c_idx].append(_r)
+
+        # Shuffle conversation keys and pick 100 complete conversations
+        _group_keys = list(_chat_groups.keys())
+        _rng_ret.shuffle(_group_keys)
+        _selected_chat_keys = _group_keys[:min(100, len(_group_keys))]
+
+        _selected_ret_rows = []
+        for _k in _selected_chat_keys:
+            _selected_ret_rows.extend(_chat_groups[_k])
+
+        # Pick 100 random samples from IndoQA (single turn)
+        _rng_ret.shuffle(_indoqa_rows)
+        _selected_ret_rows.extend(_indoqa_rows[:min(100, len(_indoqa_rows))])
+
+        for _row in _selected_ret_rows:
+            _pt = format_encoder_from_raw(_row["input"])
+            _tt = _row["target"]
+            _text_retention_formatted.append({
+                "prompt_text": _pt,
+                "target_text": _tt,
+                "dataset_idx": -1,
+                "image_indices": [],
+                "images": []
+            })
+        print(f"✅ Ditambahkan {len(_text_retention_formatted)} sampel retensi teks utuh (dari {len(_selected_chat_keys)} percakapan chat + 100 IndoQA).")
+    except Exception as e:
+        print(f"⚠️ Gagal memuat dataset retensi teks: {e}")
+
+    sft_formatted.extend(_text_retention_formatted)
+    import random as _rng_mix
+    _rng_mix.seed(SEED)
+    _rng_mix.shuffle(sft_formatted)
+
     sft_dataset = Dataset.from_list(sft_formatted)
-    print(f"✅ SFT dataset: {len(sft_dataset)} samples (dari {len(train_dataset)} percakapan)")
+    print(f"✅ Combined SFT dataset (Vision + Text Retention): {len(sft_dataset)} samples")
 
     # Splitting Train & Validation
     split_ds = sft_dataset.train_test_split(test_size=TEST_SIZE, seed=SEED)
@@ -1961,7 +2008,7 @@ def _(
         return metrics
 
     # Instantiate GrokAdEMAMix Optimizer with split learning rates
-    print("Menggunakan optimizer: GrokAdEMAMix (Split LR: Encoder=0.5x, Decoder=1.0x, Projector=1.0x, VisionTower=0.5x)")
+    print("Menggunakan optimizer: GrokAdEMAMix (Split LR: Encoder=0.2x, Decoder=0.2x, Projector=0.05x, VisionTower=0.0x)")
     _encoder_params = []
     _decoder_params = []
     _projector_params = []
@@ -1980,10 +2027,10 @@ def _(
                 _decoder_params.append(_param)
 
     _optimizer = GrokAdEMAMix([
-        {"params": _encoder_params, "lr": LEARNING_RATE * 0.5},
-        {"params": _decoder_params, "lr": LEARNING_RATE},
-        {"params": _projector_params, "lr": LEARNING_RATE},
-        {"params": _vision_tower_params, "lr": LEARNING_RATE * 0.5}
+        {"params": _encoder_params, "lr": LEARNING_RATE * 0.2},
+        {"params": _decoder_params, "lr": LEARNING_RATE * 0.2},
+        {"params": _projector_params, "lr": LEARNING_RATE * 0.05},
+        {"params": _vision_tower_params, "lr": 0.0}
     ], weight_decay=WEIGHT_DECAY, grok_alpha=2.0, grok_lamb=0.98)
 
     # Calculate steps for Cosine Scheduler
@@ -2055,6 +2102,7 @@ def _(
             num_train_epochs=NUM_EPOCHS_SFT,
             warmup_steps=WARMUP_STEPS,
             weight_decay=WEIGHT_DECAY,
+            max_grad_norm=5.0,  # Clip gradients to prevent grad norm spikes
             lr_scheduler_type=LR_SCHEDULER_TYPE,
             logging_steps=LOGGING_STEPS,
             save_strategy="steps",
@@ -2349,25 +2397,14 @@ def _(
         # Logika sama persis dengan yang dipakai di parse_orpo_prompt_to_messages().
         _merged_messages_orpo = []
         for _msg_orpo in new_messages:
-            if _merged_messages_orpo and _merged_messages_orpo[-1]["role"] == _msg_orpo["role"]:
-                _last_msg_orpo = _merged_messages_orpo[-1]
-                _merged_content_orpo = list(_last_msg_orpo["content"])
-                for _block_orpo in _msg_orpo["content"]:
-                    if (
-                        isinstance(_block_orpo, dict)
-                        and _block_orpo.get("type") == "text"
-                        and _merged_content_orpo
-                        and isinstance(_merged_content_orpo[-1], dict)
-                        and _merged_content_orpo[-1].get("type") == "text"
-                    ):
-                        _last_block_orpo = dict(_merged_content_orpo[-1])
-                        _last_block_orpo["text"] = str(_last_block_orpo.get("text", "")) + "\n" + str(_block_orpo.get("text", ""))
-                        _merged_content_orpo[-1] = _last_block_orpo
-                    else:
-                        _merged_content_orpo.append(_block_orpo)
-                _last_msg_orpo["content"] = _merged_content_orpo
+            _role_orpo = _msg_orpo["role"]
+            _content_orpo = _msg_orpo["content"]
+            if _merged_messages_orpo and _merged_messages_orpo[-1]["role"] == _role_orpo:
+                _last_msg_orpo = _merged_messages_orpo.pop()
+                _merged_content_orpo = list(_last_msg_orpo["content"]) + list(_content_orpo)
+                _merged_messages_orpo.append({"role": _role_orpo, "content": _merged_content_orpo})
             else:
-                _merged_messages_orpo.append(_msg_orpo)
+                _merged_messages_orpo.append({"role": _role_orpo, "content": list(_content_orpo)})
         new_messages = _merged_messages_orpo
 
         # Apply chat template
@@ -3040,8 +3077,8 @@ def _(
                         raise
                 return _infer_prefix_and_remap_fixed(lora_weights, safetensor_keys)
 
-            _sz._infer_prefix_and_remap = _patched_infer
-            _sz._unmatched_keys_patch_applied = True
+            setattr(_sz, "_infer_prefix_and_remap", _patched_infer)
+            setattr(_sz, "_unmatched_keys_patch_applied", True)
             print("✅ [patch] Workaround `_infer_prefix_and_remap` UnboundLocalError terpasang.")
 
         if model is None:
