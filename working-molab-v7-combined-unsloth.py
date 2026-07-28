@@ -323,6 +323,50 @@ def _():
     )
 
 
+# #####################################################################
+#   HUGGING FACE AUTHENTICATION WIDGET (RIGHT AFTER CONTROL CENTER)
+# #####################################################################
+@app.cell
+def _(mo):
+    hf_token_widget = mo.ui.text(
+        label="🔑 Hugging Face Token (HF_TOKEN):",
+        placeholder="hf_...",
+        kind="password",
+        full_width=True,
+    )
+    hf_token_widget
+    return (hf_token_widget,)
+
+
+@app.cell
+def _(hf_token_widget, mo, os):
+    from huggingface_hub import login
+
+    _val = hf_token_widget.value.strip() if hf_token_widget.value else ""
+    if not _val:
+        _val = os.environ.get("HF_TOKEN", "").strip()
+
+    if _val:
+        try:
+            os.environ["HF_TOKEN"] = _val
+            login(token=_val)
+            auth_status = mo.md(
+                "✅ **Hugging Face Token terautentikasi!** Berhasil login ke HuggingFace Hub. "
+                "Siap mengakses gated models (`google/gemma-3-4b`, `google/t5gemma-2-4b-4b`)."
+            )
+        except Exception as _e_login:
+            auth_status = mo.md(f"❌ **Gagal login ke Hugging Face:** {_e_login}")
+    else:
+        auth_status = mo.md(
+            "⚠️ **`HF_TOKEN` belum dimasukkan.** Masukkan HF Access Token Anda pada input widget di atas "
+            "untuk mengautentikasi dan mengunduh gated models (`google/gemma-3-4b`, `google/t5gemma-2-4b-4b`).\n\n"
+            "👉 Ambil token di: [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)"
+        )
+
+    auth_status
+    return (auth_status,)
+
+
 @app.cell
 def _():
     import subprocess
@@ -1120,42 +1164,6 @@ def _(format_encoder_from_raw, load_dataset, random):
     return load_hf_samples, text_orpo_to_joint, text_sft_to_joint
 
 
-@app.cell
-def _(mo):
-    # Create a secure token input
-    hf_token_input = mo.ui.text(
-        label="Hugging Face Token (HF_TOKEN)", value="", full_width=True
-    )
-    hf_token_input
-    return (hf_token_input,)
-
-
-@app.cell
-def _(hf_token_input, mo, os):
-    from huggingface_hub import login
-
-    # Stop execution of this cell if no token is entered yet
-    mo.stop(
-        not hf_token_input.value,
-        mo.md(
-            "⚠️ *Please enter your Hugging Face token in the input above to authenticate and load gated models.*"
-        ),
-    )
-
-    try:
-        # Set the environment variable so transformers/datasets can find it
-        os.environ["HF_TOKEN"] = hf_token_input.value
-        login(token=hf_token_input.value)
-        status = mo.md(
-            "✅ **Successfully authenticated with Hugging Face Hub!** You can now load gated models."
-        )
-    except Exception as e:
-        status = mo.md(f"❌ **Authentication failed:** {e}")
-
-    status
-    return
-
-
 # =====================================================================
 # FRESH PIPELINE STATE DETECTION (single source of truth saat start)
 # =====================================================================
@@ -1301,169 +1309,192 @@ def _(
         from transformers import AutoModelForSeq2SeqLM as _SteerSeq2Seq
         from transformers import AutoModelForCausalLM as _SteerCausal
 
-        gc.collect()
-        print(f"\n[1/3] Loading Base T5Gemma-2: {BASE_T5_MODEL} (CPU)...")
-        _t5 = _SteerSeq2Seq.from_pretrained(
-            BASE_T5_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
-        )
-        print(f"[2/3] Loading Gemma 3 Base: {GEMMA_BASE_MODEL} (CPU)...")
-        _g_base = _SteerCausal.from_pretrained(
-            GEMMA_BASE_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
-        )
-        print(f"[3/3] Loading Gemma 3 IT: {GEMMA_IT_MODEL} (CPU)...")
-        _g_it = _SteerCausal.from_pretrained(
-            GEMMA_IT_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
-        )
-
-        _t5_sd = _t5.state_dict()
-        _gb_sd = _g_base.state_dict()
-        _gi_sd = _g_it.state_dict()
-
-        _t5_layers = _t5.config.decoder.num_hidden_layers
-        _g_layers = _g_it.config.num_hidden_layers
-        _L = min(_t5_layers, _g_layers)
-        print(f"\n  Decoder layers: T5Gemma={_t5_layers}, Gemma3={_g_layers} → steer {_L} layers pertama")
-
-        # ---- 2. Steering dengan mapping eksplisit + shape guard ----
-        _counts = {}
-        _mismatch = []
-
-        def _steer(g_key, t_key, alpha, cat):
-            if alpha == 0:
-                return
-            if g_key in _gi_sd and g_key in _gb_sd and t_key in _t5_sd:
-                if _t5_sd[t_key].shape == _gi_sd[g_key].shape == _gb_sd[g_key].shape:
-                    _t5_sd[t_key] += alpha * (_gi_sd[g_key] - _gb_sd[g_key])
-                    _counts[cat] = _counts.get(cat, 0) + 1
-                else:
-                    _mismatch.append(
-                        f"{t_key}: t5{tuple(_t5_sd[t_key].shape)} vs gemma{tuple(_gi_sd[g_key].shape)}"
-                    )
-            else:
-                _mismatch.append(f"missing key: {g_key} / {t_key}")
-
-        for _l in range(_L):
-            # FFN — aman penuh
-            for _proj in ("gate_proj", "up_proj", "down_proj"):
-                _steer(f"model.layers.{_l}.mlp.{_proj}.weight",
-                       f"model.decoder.layers.{_l}.mlp.{_proj}.weight",
-                       STEERING_ALPHA_FFN, "ffn")
-            # Attention projections
-            for _proj, _a in (
-                ("q_proj", STEERING_ALPHA_QO),
-                ("o_proj", STEERING_ALPHA_QO),
-                ("k_proj", STEERING_ALPHA_KV),
-                ("v_proj", STEERING_ALPHA_KV),
-            ):
-                _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
-                       f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
-                       _a, f"attn.{_proj}")
-            # q_norm / k_norm
-            for _proj in ("q_norm", "k_norm"):
-                _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
-                       f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
-                       STEERING_ALPHA_QKNORM, f"attn.{_proj}")
-            # RMSNorms (Gemma input_layernorm→T5 pre_self_attn, post_attention→post_self_attn)
-            for _g_suf, _t_suf in (
-                ("input_layernorm", "pre_self_attn_layernorm"),
-                ("post_attention_layernorm", "post_self_attn_layernorm"),
-                ("pre_feedforward_layernorm", "pre_feedforward_layernorm"),
-                ("post_feedforward_layernorm", "post_feedforward_layernorm"),
-            ):
-                _steer(f"model.layers.{_l}.{_g_suf}.weight",
-                       f"model.decoder.layers.{_l}.{_t_suf}.weight",
-                       STEERING_ALPHA_NORM, "layernorm")
-
-        # Final decoder norm
-        _steer("model.norm.weight", "model.decoder.norm.weight", STEERING_ALPHA_NORM, "final_norm")
-
-        _total = sum(_counts.values())
-        print(f"\n  ✅ Steered {_total} tensors: {_counts}")
-        if _mismatch:
-            print(f"  ⚠️ {len(_mismatch)} keys di-skip (missing/shape mismatch). Contoh:")
-            for _m in _mismatch[:10]:
-                print(f"     - {_m}")
-        if _total == 0:
-            raise RuntimeError("[STEER] Tidak ada satupun tensor yang tersuntik — cek key mapping / shape!")
-
-        # Bebaskan 2 model donor sebelum test & save
-        del _g_base, _g_it, _gb_sd, _gi_sd
-        gc.collect()
-
-        # ---- 3. Smoke test (generate singkat sebelum upload) ----
-        if STEERING_SMOKE_TEST:
-            print("\n  [SMOKE TEST] Generate 3 prompt singkat (eyeball garbage check)...")
-            from transformers import AutoTokenizer as _SteerTok
-            _smoke_tok = _SteerTok.from_pretrained(BASE_T5_MODEL, token=_token, trust_remote_code=True)
-            assert _smoke_tok is not None, f"Gagal memuat tokenizer dari {BASE_T5_MODEL} untuk smoke test"
-            _t5.to("cuda" if torch.cuda.is_available() else "cpu")
-            _t5.eval()
-            _smoke_prompts = [
-                "user: Halo! Perkenalkan dirimu secara singkat.",
-                "user: Apa ibu kota Indonesia?",
-                "user: Tolong ringkas: Fotosintesis adalah proses tumbuhan mengubah cahaya matahari menjadi energi.",
-            ]
-            with torch.no_grad():
-                for _p in _smoke_prompts:
-                    _fmt = format_encoder_from_raw(_p)
-                    _ids = _smoke_tok.encode(_fmt, add_special_tokens=True, return_tensors="pt").to(_t5.device)
-                    _out = _t5.generate(
-                        input_ids=_ids, max_new_tokens=48, do_sample=False,
-                        pad_token_id=_smoke_tok.pad_token_id,
-                    )
-                    _resp = _smoke_tok.decode(_out[0][_ids.shape[-1]:], skip_special_tokens=True)
-                    print(f"\n  Q: {_p}\n  A: {_resp}")
-            _t5.to("cpu")
+        _load_ok = False
+        if not _token:
+            print("❌ [STEER] Error: HF_TOKEN belum diset di Cell 'Hugging Face Token'.")
+            print("ℹ️ Model 'google/gemma-3-4b' & 'google/gemma-3-4b-it' adalah GATED MODELS di Hugging Face.")
+            print("👉 Pastikan Anda telah menyetujui lisensi pada link HF berikut:")
+            print("   1. https://huggingface.co/google/gemma-3-4b")
+            print("   2. https://huggingface.co/google/gemma-3-4b-it")
+            print("   3. https://huggingface.co/google/t5gemma-2-4b-4b")
+            print("👉 Masukkan HF Token Anda di input widget pada Cell 'Hugging Face Token' lalu jalankan ulang cell ini.")
+            steered_ready = False
+        else:
             gc.collect()
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            try:
+                print(f"\n[1/3] Loading Base T5Gemma-2: {BASE_T5_MODEL} (CPU)...")
+                _t5 = _SteerSeq2Seq.from_pretrained(
+                    BASE_T5_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
+                )
+                print(f"[2/3] Loading Gemma 3 Base: {GEMMA_BASE_MODEL} (CPU)...")
+                _g_base = _SteerCausal.from_pretrained(
+                    GEMMA_BASE_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
+                )
+                print(f"[3/3] Loading Gemma 3 IT: {GEMMA_IT_MODEL} (CPU)...")
+                _g_it = _SteerCausal.from_pretrained(
+                    GEMMA_IT_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
+                )
+                _load_ok = True
+            except Exception as _e_load:
+                print(f"\n❌ [STEER] Gagal memuat model gated HF: {_e_load}")
+                print("ℹ️ Model 'google/gemma-3-4b' & 'google/gemma-3-4b-it' memerlukan akses lisensi HuggingFace!")
+                print("👉 Buka link berikut di browser dan klik 'Access repository / Accept license':")
+                print("   • https://huggingface.co/google/gemma-3-4b")
+                print("   • https://huggingface.co/google/gemma-3-4b-it")
+                print("   • https://huggingface.co/google/t5gemma-2-4b-4b")
+                print("👉 Kemudian pastikan HF_TOKEN di widget diisi token HuggingFace yang valid.")
+                steered_ready = False
 
-        # ---- 4. Save + tokenizer + patch + upload ----
-        _local = "/tmp/t5gemma2_steered"
-        print(f"\n  Saving steered checkpoint ke {_local} ...")
-        os.makedirs(_local, exist_ok=True)
-        _t5.save_pretrained(_local, safe_serialization=True)
-        from transformers import AutoTokenizer as _SteerTok2
-        _steer_tok = _SteerTok2.from_pretrained(BASE_T5_MODEL, token=_token, trust_remote_code=True)
-        assert _steer_tok is not None, f"Gagal memuat tokenizer dari {BASE_T5_MODEL}"
-        _steer_tok.save_pretrained(_local)
+            if _load_ok:
+                _t5_sd = _t5.state_dict()
+                _gb_sd = _g_base.state_dict()
+                _gi_sd = _g_it.state_dict()
 
-        # Patch tokenizer_config: tambahkan task_prefix_mapping (inline — setara
-        # dengan isi tokenizer_config_patched.json di repo v6)
-        import json as _json
-        _tc_path = os.path.join(_local, "tokenizer_config.json")
-        with open(_tc_path, "r", encoding="utf-8") as _f:
-            _tc = _json.load(_f)
-        _tc.setdefault("task_prefix_mapping", {
-            "<unused1>": "summarize",
-            "<unused2>": "translate",
-            "<unused3>": "ner",
-            "<unused4>": "qa",
-            "<unused5>": "paraphrase",
-            "<unused6>": "general_chat",
-        })
-        with open(_tc_path, "w", encoding="utf-8") as _f:
-            _json.dump(_tc, _f, indent=2, ensure_ascii=False)
-        print("  ✅ tokenizer_config dipatch dengan task_prefix_mapping")
+                _t5_layers = _t5.config.decoder.num_hidden_layers
+                _g_layers = _g_it.config.num_hidden_layers
+                _L = min(_t5_layers, _g_layers)
+                print(f"\n  Decoder layers: T5Gemma={_t5_layers}, Gemma3={_g_layers} → steer {_L} layers pertama")
 
-        print(f"\n  Uploading ke {UNIFIED_HF_REPO} subfolder '{STEERED_SUBFOLDER}/'...")
-        _api.upload_folder(
-            folder_path=_local,
-            path_in_repo=STEERED_SUBFOLDER,
-            repo_id=UNIFIED_HF_REPO,
-            repo_type="model",
-            commit_message=(
-                f"Phase 0.5 Task Vector Steering: ffn={STEERING_ALPHA_FFN}, qo={STEERING_ALPHA_QO}, "
-                f"kv={STEERING_ALPHA_KV}, norm={STEERING_ALPHA_NORM} (Gemma3-IT − Gemma3-Base)"
-            ),
-        )
+                # ---- 2. Steering dengan mapping eksplisit + shape guard ----
+                _counts = {}
+                _mismatch = []
 
-        del _t5, _t5_sd, _steer_tok
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+                def _steer(g_key, t_key, alpha, cat):
+                    if alpha == 0:
+                        return
+                    if g_key in _gi_sd and g_key in _gb_sd and t_key in _t5_sd:
+                        if _t5_sd[t_key].shape == _gi_sd[g_key].shape == _gb_sd[g_key].shape:
+                            _t5_sd[t_key] += alpha * (_gi_sd[g_key] - _gb_sd[g_key])
+                            _counts[cat] = _counts.get(cat, 0) + 1
+                        else:
+                            _mismatch.append(
+                                f"{t_key}: t5{tuple(_t5_sd[t_key].shape)} vs gemma{tuple(_gi_sd[g_key].shape)}"
+                            )
+                    else:
+                        _mismatch.append(f"missing key: {g_key} / {t_key}")
 
-        print(f"\n  ✅ [STEER] BERHASIL! Checkpoint steered di {UNIFIED_HF_REPO}/{STEERED_SUBFOLDER}")
-        steered_ready = True
+                for _l in range(_L):
+                    # FFN — aman penuh
+                    for _proj in ("gate_proj", "up_proj", "down_proj"):
+                        _steer(f"model.layers.{_l}.mlp.{_proj}.weight",
+                               f"model.decoder.layers.{_l}.mlp.{_proj}.weight",
+                               STEERING_ALPHA_FFN, "ffn")
+                    # Attention projections
+                    for _proj, _a in (
+                        ("q_proj", STEERING_ALPHA_QO),
+                        ("o_proj", STEERING_ALPHA_QO),
+                        ("k_proj", STEERING_ALPHA_KV),
+                        ("v_proj", STEERING_ALPHA_KV),
+                    ):
+                        _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
+                               f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
+                               _a, f"attn.{_proj}")
+                    # q_norm / k_norm
+                    for _proj in ("q_norm", "k_norm"):
+                        _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
+                               f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
+                               STEERING_ALPHA_QKNORM, f"attn.{_proj}")
+                    # RMSNorms (Gemma input_layernorm→T5 pre_self_attn, post_attention→post_self_attn)
+                    for _g_suf, _t_suf in (
+                        ("input_layernorm", "pre_self_attn_layernorm"),
+                        ("post_attention_layernorm", "post_self_attn_layernorm"),
+                        ("pre_feedforward_layernorm", "pre_feedforward_layernorm"),
+                        ("post_feedforward_layernorm", "post_feedforward_layernorm"),
+                    ):
+                        _steer(f"model.layers.{_l}.{_g_suf}.weight",
+                               f"model.decoder.layers.{_l}.{_t_suf}.weight",
+                               STEERING_ALPHA_NORM, "layernorm")
+
+                # Final decoder norm
+                _steer("model.norm.weight", "model.decoder.norm.weight", STEERING_ALPHA_NORM, "final_norm")
+
+                _total = sum(_counts.values())
+                print(f"\n  ✅ Steered {_total} tensors: {_counts}")
+                if _mismatch:
+                    print(f"  ⚠️ {len(_mismatch)} keys di-skip (missing/shape mismatch). Contoh:")
+                    for _m in _mismatch[:10]:
+                        print(f"     - {_m}")
+                if _total == 0:
+                    raise RuntimeError("[STEER] Tidak ada satupun tensor yang tersuntik — cek key mapping / shape!")
+
+                # Bebaskan 2 model donor sebelum test & save
+                del _g_base, _g_it, _gb_sd, _gi_sd
+                gc.collect()
+
+                # ---- 3. Smoke test (generate singkat sebelum upload) ----
+                if STEERING_SMOKE_TEST:
+                    print("\n  [SMOKE TEST] Generate 3 prompt singkat (eyeball garbage check)...")
+                    from transformers import AutoTokenizer as _SteerTok
+                    _smoke_tok = _SteerTok.from_pretrained(BASE_T5_MODEL, token=_token, trust_remote_code=True)
+                    assert _smoke_tok is not None, f"Gagal memuat tokenizer dari {BASE_T5_MODEL} untuk smoke test"
+                    _t5.to("cuda" if torch.cuda.is_available() else "cpu")
+                    _t5.eval()
+                    _smoke_prompts = [
+                        "user: Halo! Perkenalkan dirimu secara singkat.",
+                        "user: Apa ibu kota Indonesia?",
+                        "user: Tolong ringkas: Fotosintesis adalah proses tumbuhan mengubah cahaya matahari menjadi energi.",
+                    ]
+                    with torch.no_grad():
+                        for _p in _smoke_prompts:
+                            _fmt = format_encoder_from_raw(_p)
+                            _ids = _smoke_tok.encode(_fmt, add_special_tokens=True, return_tensors="pt").to(_t5.device)
+                            _out = _t5.generate(
+                                input_ids=_ids, max_new_tokens=48, do_sample=False,
+                                pad_token_id=_smoke_tok.pad_token_id,
+                            )
+                            _resp = _smoke_tok.decode(_out[0][_ids.shape[-1]:], skip_special_tokens=True)
+                            print(f"\n  Q: {_p}\n  A: {_resp}")
+                    _t5.to("cpu")
+                    gc.collect()
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+                # ---- 4. Save + tokenizer + patch + upload ----
+                _local = "/tmp/t5gemma2_steered"
+                print(f"\n  Saving steered checkpoint ke {_local} ...")
+                os.makedirs(_local, exist_ok=True)
+                _t5.save_pretrained(_local, safe_serialization=True)
+                from transformers import AutoTokenizer as _SteerTok2
+                _steer_tok = _SteerTok2.from_pretrained(BASE_T5_MODEL, token=_token, trust_remote_code=True)
+                assert _steer_tok is not None, f"Gagal memuat tokenizer dari {BASE_T5_MODEL}"
+                _steer_tok.save_pretrained(_local)
+
+                # Patch tokenizer_config: tambahkan task_prefix_mapping (inline — setara
+                # dengan isi tokenizer_config_patched.json di repo v6)
+                import json as _json
+                _tc_path = os.path.join(_local, "tokenizer_config.json")
+                with open(_tc_path, "r", encoding="utf-8") as _f:
+                    _tc = _json.load(_f)
+                _tc.setdefault("task_prefix_mapping", {
+                    "<unused1>": "summarize",
+                    "<unused2>": "translate",
+                    "<unused3>": "ner",
+                    "<unused4>": "qa",
+                    "<unused5>": "paraphrase",
+                    "<unused6>": "general_chat",
+                })
+                with open(_tc_path, "w", encoding="utf-8") as _f:
+                    _json.dump(_tc, _f, indent=2, ensure_ascii=False)
+                print("  ✅ tokenizer_config dipatch dengan task_prefix_mapping")
+
+                print(f"\n  Uploading ke {UNIFIED_HF_REPO} subfolder '{STEERED_SUBFOLDER}/'...")
+                _api.upload_folder(
+                    folder_path=_local,
+                    path_in_repo=STEERED_SUBFOLDER,
+                    repo_id=UNIFIED_HF_REPO,
+                    repo_type="model",
+                    commit_message=(
+                        f"Phase 0.5 Task Vector Steering: ffn={STEERING_ALPHA_FFN}, qo={STEERING_ALPHA_QO}, "
+                        f"kv={STEERING_ALPHA_KV}, norm={STEERING_ALPHA_NORM} (Gemma3-IT − Gemma3-Base)"
+                    ),
+                )
+
+                del _t5, _t5_sd, _steer_tok
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                print(f"\n  ✅ [STEER] BERHASIL! Checkpoint steered di {UNIFIED_HF_REPO}/{STEERED_SUBFOLDER}")
+                steered_ready = True
     else:
         print("⏭️ [STEER] Dilewati — ENABLE_STEERING=False / steered sudah ada (tanpa FORCE) / stage sudah lewat.")
         steered_ready = True
@@ -1508,11 +1539,22 @@ def _(
     from huggingface_hub import HfApi as _GraftApi
 
     _token = os.environ.get("HF_TOKEN")
-    _api = _GraftApi(token=_token)
-    _files = _api.list_repo_files(UNIFIED_HF_REPO)
-    _already = any(
-        f.startswith(f"{CANGKOK_SUBFOLDER}/") and f.endswith("config.json") for f in _files
-    )
+    cangkok_ready = False
+
+    _can_check = True
+    if not _token:
+        print("❌ [CANGKOK] Error: HF_TOKEN belum diset di Cell 'Hugging Face Token'.")
+        _can_check = False
+    elif not steered_ready and ENABLE_STEERING and pipeline_stage == "steering":
+        print("⚠️ [CANGKOK] Dilewati — Phase 0.5 Steering belum selesai / gagal.")
+        _can_check = False
+
+    if _can_check:
+        _api = _GraftApi(token=_token)
+        _files = _api.list_repo_files(UNIFIED_HF_REPO)
+        _already = any(
+            f.startswith(f"{CANGKOK_SUBFOLDER}/") and f.endswith("config.json") for f in _files
+        )
 
     _should_run = pipeline_stage == "cangkok" and (CANGKOK_FORCE or not _already)
     if _should_run:
@@ -1541,122 +1583,133 @@ def _(
             print(f"\n[A] Target: {BASE_T5_MODEL} (steering OFF)")
 
         print("    Loading target (CPU, bf16)...")
-        _model_tgt = _GraftSeq2Seq.from_pretrained(
-            _tgt_id, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True, **_tgt_kw
-        )
-        print(f"    ✅ {_model_tgt.__class__.__name__}")
+        _graft_ok = False
+        try:
+            _model_tgt = _GraftSeq2Seq.from_pretrained(
+                _tgt_id, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True, **_tgt_kw
+            )
+            print(f"    ✅ {_model_tgt.__class__.__name__}")
 
-        # ---- 2. Load DONOR ----
-        print(f"\n[C] Loading donor: {GEMMA_IT_MODEL} ...")
-        _model_src = _GraftCausal.from_pretrained(
-            GEMMA_IT_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
-        )
-        print(f"    ✅ {_model_src.__class__.__name__}")
+            # ---- 2. Load DONOR ----
+            print(f"\n[C] Loading donor: {GEMMA_IT_MODEL} ...")
+            _model_src = _GraftCausal.from_pretrained(
+                GEMMA_IT_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
+            )
+            print(f"    ✅ {_model_src.__class__.__name__}")
+            _graft_ok = True
+        except Exception as _e_graft_load:
+            print(f"\n❌ [CANGKOK] Gagal memuat model untuk cangkok: {_e_graft_load}")
+            cangkok_ready = False
 
-        # ---- 3. Ekstrak vision params donor (normalisasi prefix model.) ----
-        _src_params = {}
-        for _name, _param in _model_src.named_parameters():
-            if "vision_tower" in _name or "multi_modal_projector" in _name:
-                _clean = _name[len("model."):] if _name.startswith("model.") else _name
-                _src_params[_clean] = _param.detach().cpu()
-        print(f"\n  Donor: {len(_src_params)} vision params (SigLIP + projector)")
+        if _graft_ok:
+            # ---- 3. Ekstrak vision params donor (normalisasi prefix model.) ----
+            _src_params = {}
+            for _name, _param in _model_src.named_parameters():
+                if "vision_tower" in _name or "multi_modal_projector" in _name:
+                    _clean = _name[len("model."):] if _name.startswith("model.") else _name
+                    _src_params[_clean] = _param.detach().cpu()
+            print(f"\n  Donor: {len(_src_params)} vision params (SigLIP + projector)")
 
-        # ---- 4. CANGKOK: copy donor → target ----
-        print("\n  Melakukan cangkok...")
-        _grafted = 0
-        _skipped = 0
-        for _name, _param in _model_tgt.named_parameters():
-            if "vision_tower" not in _name and "multi_modal_projector" not in _name:
-                continue
-            _clean = _name
-            if _name.startswith("model.encoder."):
-                _clean = _name[len("model.encoder."):]
-            elif _name.startswith("encoder."):
-                _clean = _name[len("encoder."):]
+            # ---- 4. CANGKOK: copy donor → target ----
+            print("\n  Melakukan cangkok...")
+            _grafted = 0
+            _skipped = 0
+            for _name, _param in _model_tgt.named_parameters():
+                if "vision_tower" not in _name and "multi_modal_projector" not in _name:
+                    continue
+                _clean = _name
+                if _name.startswith("model.encoder."):
+                    _clean = _name[len("model.encoder."):]
+                elif _name.startswith("encoder."):
+                    _clean = _name[len("encoder."):]
 
-            if _clean in _src_params:
-                _src = _src_params[_clean]
-                if _src.shape == _param.shape:
-                    _param.data.copy_(_src.to(_param.device, _param.dtype))
-                    _grafted += 1
+                if _clean in _src_params:
+                    _src = _src_params[_clean]
+                    if _src.shape == _param.shape:
+                        _param.data.copy_(_src.to(_param.device, _param.dtype))
+                        _grafted += 1
+                    else:
+                        print(f"    ⚠️ SHAPE MISMATCH {_clean}: {_src.shape} vs {_param.shape}")
+                        _skipped += 1
                 else:
-                    print(f"    ⚠️ SHAPE MISMATCH {_clean}: {_src.shape} vs {_param.shape}")
+                    print(f"    ⚠️ Tidak ditemukan di donor: {_clean}")
                     _skipped += 1
-            else:
-                print(f"    ⚠️ Tidak ditemukan di donor: {_clean}")
-                _skipped += 1
-        print(f"  ✅ Cangkok: {_grafted} params, skip: {_skipped}")
+            print(f"  ✅ Cangkok: {_grafted} params, skip: {_skipped}")
 
-        # ---- 5. Verifikasi (diff target vs donor harus < 1e-6) ----
-        print("\n  Verifikasi cangkok...")
-        _v_ok = 0
-        _v_fail = 0
-        for _name, _param in _model_tgt.named_parameters():
-            if "vision_tower" not in _name and "multi_modal_projector" not in _name:
-                continue
-            _clean = _name
-            if _name.startswith("model.encoder."):
-                _clean = _name[len("model.encoder."):]
-            elif _name.startswith("encoder."):
-                _clean = _name[len("encoder."):]
-            if _clean in _src_params:
-                _diff = (_param.detach().cpu().float() - _src_params[_clean].float()).abs().max().item()
-                if _diff < 1e-6:
-                    _v_ok += 1
-                else:
-                    print(f"    ❌ Verify fail {_clean}: diff={_diff:.2e}")
-                    _v_fail += 1
-        print(f"  ✅ Verify: {_v_ok} OK, {_v_fail} fail")
-        if _v_fail > 0 or _grafted == 0:
-            raise RuntimeError(
-                f"[CANGKOK] Gagal: {_grafted} params digraft, {_v_fail} verify fail."
+            # ---- 5. Verifikasi (diff target vs donor harus < 1e-6) ----
+            print("\n  Verifikasi cangkok...")
+            _v_ok = 0
+            _v_fail = 0
+            for _name, _param in _model_tgt.named_parameters():
+                if "vision_tower" not in _name and "multi_modal_projector" not in _name:
+                    continue
+                _clean = _name
+                if _name.startswith("model.encoder."):
+                    _clean = _name[len("model.encoder."):]
+                elif _name.startswith("encoder."):
+                    _clean = _name[len("encoder."):]
+                if _clean in _src_params:
+                    _diff = (_param.detach().cpu().float() - _src_params[_clean].float()).abs().max().item()
+                    if _diff < 1e-6:
+                        _v_ok += 1
+                    else:
+                        print(f"    ❌ Verify fail {_clean}: diff={_diff:.2e}")
+                        _v_fail += 1
+            print(f"  ✅ Verify: {_v_ok} OK, {_v_fail} fail")
+            if _v_fail > 0 or _grafted == 0:
+                raise RuntimeError(
+                    f"[CANGKOK] Gagal: {_grafted} params digraft, {_v_fail} verify fail."
+                )
+
+            # ---- 6. Save + processor donor-kompatibel + tokenizer patch + upload ----
+            _local_save = "/tmp/v7_vision_cangkok"
+            os.makedirs(_local_save, exist_ok=True)
+            print(f"\n  Saving lokal ke {_local_save}...")
+            _model_tgt.save_pretrained(_local_save, safe_serialization=True)
+
+            # Processor dari T5Gemma2 ORIGINAL (punya full preprocessor_config.json)
+            _processor_orig = _GraftProc.from_pretrained(BASE_T5_MODEL, token=_token)
+            _processor_orig.save_pretrained(_local_save)
+
+            # Patch tokenizer_config: task_prefix_mapping (inline, sama seperti Phase 0.5)
+            import json as _json
+            _tc_path = os.path.join(_local_save, "tokenizer_config.json")
+            with open(_tc_path, "r", encoding="utf-8") as _f:
+                _tc = _json.load(_f)
+            _tc.setdefault("task_prefix_mapping", {
+                "<unused1>": "summarize",
+                "<unused2>": "translate",
+                "<unused3>": "ner",
+                "<unused4>": "qa",
+                "<unused5>": "paraphrase",
+                "<unused6>": "general_chat",
+            })
+            with open(_tc_path, "w", encoding="utf-8") as _f:
+                _json.dump(_tc, _f, indent=2, ensure_ascii=False)
+
+            print(f"  Uploading ke {UNIFIED_HF_REPO} subfolder '{CANGKOK_SUBFOLDER}/'...")
+            _api.upload_folder(
+                folder_path=_local_save,
+                path_in_repo=CANGKOK_SUBFOLDER,
+                repo_id=UNIFIED_HF_REPO,
+                repo_type="model",
+                commit_message="Phase 1.5 Vision Grafting: SigLIP + projector dari Gemma 3 4B IT",
             )
 
-        # ---- 6. Save + processor donor-kompatibel + tokenizer patch + upload ----
-        _local_save = "/tmp/v7_vision_cangkok"
-        os.makedirs(_local_save, exist_ok=True)
-        print(f"\n  Saving lokal ke {_local_save}...")
-        _model_tgt.save_pretrained(_local_save, safe_serialization=True)
+            del _model_tgt, _model_src, _src_params, _processor_orig
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        # Processor dari T5Gemma2 ORIGINAL (punya full preprocessor_config.json)
-        _processor_orig = _GraftProc.from_pretrained(BASE_T5_MODEL, token=_token)
-        _processor_orig.save_pretrained(_local_save)
-
-        # Patch tokenizer_config: task_prefix_mapping (inline, sama seperti Phase 0.5)
-        import json as _json
-        _tc_path = os.path.join(_local_save, "tokenizer_config.json")
-        with open(_tc_path, "r", encoding="utf-8") as _f:
-            _tc = _json.load(_f)
-        _tc.setdefault("task_prefix_mapping", {
-            "<unused1>": "summarize",
-            "<unused2>": "translate",
-            "<unused3>": "ner",
-            "<unused4>": "qa",
-            "<unused5>": "paraphrase",
-            "<unused6>": "general_chat",
-        })
-        with open(_tc_path, "w", encoding="utf-8") as _f:
-            _json.dump(_tc, _f, indent=2, ensure_ascii=False)
-
-        print(f"  Uploading ke {UNIFIED_HF_REPO} subfolder '{CANGKOK_SUBFOLDER}/'...")
-        _api.upload_folder(
-            folder_path=_local_save,
-            path_in_repo=CANGKOK_SUBFOLDER,
-            repo_id=UNIFIED_HF_REPO,
-            repo_type="model",
-            commit_message="Phase 1.5 Vision Grafting: SigLIP + projector dari Gemma 3 4B IT",
-        )
-
-        del _model_tgt, _model_src, _src_params, _processor_orig
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        print(f"\n  ✅ [CANGKOK] BERHASIL! Base model training di: {UNIFIED_HF_REPO}/{CANGKOK_SUBFOLDER}")
-        cangkok_ready = True
+            print(f"\n  ✅ [CANGKOK] BERHASIL! Base model training di: {UNIFIED_HF_REPO}/{CANGKOK_SUBFOLDER}")
+            cangkok_ready = True
     else:
-        print("⏭️ [CANGKOK] Dilewati — cangkok sudah ada (tanpa FORCE) / stage sudah lewat.")
-        cangkok_ready = True
+        _is_past = pipeline_stage in ("sft", "orpo", "merge", "done")
+        cangkok_ready = _already or _is_past
+        if not cangkok_ready:
+            print("⚠️ [CANGKOK] Dilewati — base model `cangkok/` belum tersedia di repo HF.")
+        else:
+            print("⏭️ [CANGKOK] Dilewati — cangkok sudah ada (tanpa FORCE) / stage sudah lewat.")
     return (cangkok_ready,)
 
 
@@ -1728,6 +1781,8 @@ def _(
 
     if _stage in ("done", "merge"):
         print(f"[MODEL] Stage `{_stage}` — training sudah selesai; model tidak dimuat (merge cell yang akan load).")
+    elif not cangkok_ready and _stage not in ("orpo", "merge", "done"):
+        print("⏭️ [MODEL] Base model `cangkok/` belum tersedia di Hugging Face (Phase 0.5/1.5 belum selesai). Skip loading model.")
     else:
         if _stage == "orpo":
             _model_path = os.path.join(OUTPUT_DIR, JOINT_PREFIX, "sft", "final_adapter")

@@ -1,16 +1,16 @@
 # Graph Report - instruct  (2026-07-28)
 
 ## Corpus Check
-- 301 files · ~115,328,028 words
+- 302 files · ~115,328,377 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 3320 nodes · 3758 edges · 489 communities (426 shown, 63 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 46 edges (avg confidence: 0.8)
+- 3324 nodes · 3761 edges · 490 communities (426 shown, 64 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 47 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `bde45044`
+- Built from commit: `7f831d78`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -193,7 +193,7 @@
 - [[_COMMUNITY_Community 175|Community 175]]
 - [[_COMMUNITY_Community 176|Community 176]]
 - [[_COMMUNITY_Community 177|Community 177]]
-- [[_COMMUNITY_Community 179|Community 179]]
+- [[_COMMUNITY_Community 178|Community 178]]
 - [[_COMMUNITY_Community 180|Community 180]]
 - [[_COMMUNITY_Community 181|Community 181]]
 - [[_COMMUNITY_Community 182|Community 182]]
@@ -324,13 +324,13 @@
 - [[_COMMUNITY_Community 308|Community 308]]
 - [[_COMMUNITY_Community 309|Community 309]]
 - [[_COMMUNITY_Community 310|Community 310]]
-- [[_COMMUNITY_Community 311|Community 311]]
-- [[_COMMUNITY_Community 317|Community 317]]
-- [[_COMMUNITY_Community 339|Community 339]]
+- [[_COMMUNITY_Community 316|Community 316]]
+- [[_COMMUNITY_Community 338|Community 338]]
+- [[_COMMUNITY_Community 344|Community 344]]
 - [[_COMMUNITY_Community 345|Community 345]]
 - [[_COMMUNITY_Community 346|Community 346]]
-- [[_COMMUNITY_Community 347|Community 347]]
-- [[_COMMUNITY_Community 349|Community 349]]
+- [[_COMMUNITY_Community 348|Community 348]]
+- [[_COMMUNITY_Community 352|Community 352]]
 - [[_COMMUNITY_Community 353|Community 353]]
 - [[_COMMUNITY_Community 354|Community 354]]
 - [[_COMMUNITY_Community 355|Community 355]]
@@ -352,10 +352,10 @@
 - [[_COMMUNITY_Community 371|Community 371]]
 - [[_COMMUNITY_Community 372|Community 372]]
 - [[_COMMUNITY_Community 373|Community 373]]
-- [[_COMMUNITY_Community 485|Community 485]]
 - [[_COMMUNITY_Community 486|Community 486]]
 - [[_COMMUNITY_Community 487|Community 487]]
 - [[_COMMUNITY_Community 488|Community 488]]
+- [[_COMMUNITY_Community 489|Community 489]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `Greeting` - 109 edges
@@ -371,6 +371,8 @@
 
 ## Surprising Connections (you probably didn't know these)
 - `_()` --calls--> `load_hf_samples()`  [INFERRED]
+  working-molab-v7-combined-unsloth.py → test_v6_sft_orpo.py
+- `_()` --calls--> `load_hf_samples()`  [INFERRED]
   working-molab-v6-combined-unsloth.py → test_v6_sft_orpo.py
 - `_()` --calls--> `load_hf_samples()`  [INFERRED]
   working-molab-v3.py → test_v6_sft_orpo.py
@@ -378,10 +380,8 @@
   working-molab-v4-exp.py → test_v6_sft_orpo.py
 - `_()` --calls--> `load_hf_samples()`  [INFERRED]
   working-molab-v4.py → test_v6_sft_orpo.py
-- `_()` --calls--> `load_hf_samples()`  [INFERRED]
-  working-molab-v5-unsloth.py → test_v6_sft_orpo.py
 
-## Communities (489 total, 63 thin omitted)
+## Communities (490 total, 64 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.06
@@ -392,12 +392,12 @@ Cohesion: 0.05
 Nodes (46): GRPOConfig, align_completion_tool_mask(), align_logprobs_with_mask(), autotune_batch_and_chunks(), calculate_pad_tokens_in_prompt(), _calculate_rewards(), chunked_hidden_states_selective_log_softmax(), chunked_selective_log_softmax() (+38 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.05
-Nodes (31): apply_rotary_pos_emb(), eager_attention_forward(), EmptyLogits, 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, Rotates half the hidden dims of the input., Applies Rotary Position Embedding to the query and key tensors.      Args:, This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The, Multi-headed attention from 'Attention Is All You Need' paper (+23 more)
+Cohesion: 0.07
+Nodes (28): DataCollatorForSeq2Seq, apply_logit_mask(), compute_metrics(), CustomORPOTrainer, CustomSeq2SeqTrainer, format_encoder_from_raw(), GrokAdEMAMix, load_hf_samples() (+20 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.07
-Nodes (26): DataCollatorForSeq2Seq, apply_logit_mask(), compute_metrics(), CustomORPOTrainer, CustomSeq2SeqTrainer, format_encoder_from_raw(), GrokAdEMAMix, load_hf_samples() (+18 more)
+Cohesion: 0.05
+Nodes (31): apply_rotary_pos_emb(), eager_attention_forward(), EmptyLogits, 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, Rotates half the hidden dims of the input., Applies Rotary Position Embedding to the query and key tensors.      Args:, This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The, Multi-headed attention from 'Attention Is All You Need' paper (+23 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.05
@@ -488,48 +488,48 @@ Cohesion: 0.07
 Nodes (29): 1. Persiapan Data (Data Preprocessing), 1. Project Infographic, 2. Dataset Specification, 2. Menjalankan Supervised Fine-Tuning (SFT), 3. Alignment dengan DPO, Cara Instalasi Unsloth Patched:, Cara Menjalankan Chat Simulator:, code:json ({) (+21 more)
 
 ### Community 26 - "Community 26"
+Cohesion: 0.07
+Nodes (29): Assistant, Assistant, Assistant, Assistant, Assistant, Assistant, Assistant, Assistant (+21 more)
+
+### Community 27 - "Community 27"
 Cohesion: 0.08
 Nodes (17): apply_logit_mask(), convert_sft_record_to_vision(), format_single_rec(), parse_orpo_prompt_to_messages(), Unroll multi-turn conversation ke individual SFT samples untuk Seq2Seq., Parse ORPO prompt string → list of messages dengan image blocks., Collator Seq2Seq + Vision untuk T5Gemma2 SFT., Collator ORPO + Vision. Encoder SHARED, decoder labels berbeda. (+9 more)
 
-### Community 27 - "Community 27"
-Cohesion: 0.07
-Nodes (26): Assistant, Assistant, Assistant, Assistant, Assistant, Assistant, Assistant, code:json ({) (+18 more)
-
 ### Community 28 - "Community 28"
-Cohesion: 0.12
-Nodes (23): _canonical_lora_weights_for_grouped_mm(), extract_moe_lora_weights_for_grouped_mm(), _get_lora_wrapper_for_param(), _get_moe_lora_io_dims(), _get_param_shape_from_module(), get_weight_preprocessor(), _GroupedMMRecompute, _is_gpt_oss_model() (+15 more)
-
-### Community 29 - "Community 29"
 Cohesion: 0.08
 Nodes (23): BUG #1 — CLEARED: BOS/EOS Double Addition, BUG #2 — MINOR: ORPO Path pixel_values tidak masuk ke model.forward(), BUG #3 — KRITIS: Model Stuck in Eval Mode Setelah Setiap Evaluate(), BUG #4 — KRITIS: BOS Mismatch antara Training dan Validation, BUG #5 — PENTING: Effective Learning Rate 8x Lebih Agresif dari Text-Only, code:block1 (Total checks : 33), code:block10 (Standard LoRA scaling (alpha/r)    : 2.0), code:python (# Turunkan LR dan naikkan grad_accum agar effective LR mende) (+15 more)
 
-### Community 30 - "Community 30"
+### Community 29 - "Community 29"
 Cohesion: 0.08
 Nodes (21): 1. Prinsip Utama Pengisian Konten, 2. Struktur Dokumen JACoW (Typst), 3. Standardisasi Diagram CeTZ, 4. Alur Kerja Kompilasi & Analisis Layout, 5. Referensi & Tabel Data, A. Gunakan Model Node Berbasis Center (Pusat), A. Kompilasi Typst ke PDF, Aturan Formatting Halaman & Kolom (+13 more)
 
-### Community 31 - "Community 31"
+### Community 30 - "Community 30"
 Cohesion: 0.09
 Nodes (22): Blackwell GPUs Update, CUDA 13.3 Update, Experimental Canvas / Artifacts, Gemma 4 12B, Install, Runtime & Hardware, Mac Updates, MCP, New Chat UI (+14 more)
 
-### Community 32 - "Community 32"
-Cohesion: 0.1
-Nodes (22): _apply_lora_grouped_mm(), _extract_lora_from_wrapper(), _extract_lora_weights(), forward_native_moe_loop(), forward_triton_grouped_gemm(), _get_routing_indices(), _has_lora_adapters(), _is_moe_experts_module() (+14 more)
+### Community 31 - "Community 31"
+Cohesion: 0.13
+Nodes (21): _canonical_lora_weights_for_grouped_mm(), extract_moe_lora_weights_for_grouped_mm(), _get_moe_lora_io_dims(), _get_param_shape_from_module(), _GroupedMMRecompute, _is_gpt_oss_model(), _iter_model_configs(), _MoEGateGradIdentity (+13 more)
 
-### Community 33 - "Community 33"
+### Community 32 - "Community 32"
 Cohesion: 0.09
 Nodes (22): AsyncGRPO: native weight sync with vLLM ≥ 0.22.0, code:python, code:python, code:python, code:python, code:python, code:python, Experimental Harbor integration (+14 more)
 
-### Community 34 - "Community 34"
+### Community 33 - "Community 33"
 Cohesion: 0.17
 Nodes (19): assert_same_keys(), check_if_quantized(), create_huggingface_repo(), create_lora_statistics(), expand_module_keys(), find_lora_base_model(), _get_lora_scaling(), _get_modules_to_save_weight() (+11 more)
 
-### Community 35 - "Community 35"
+### Community 34 - "Community 34"
 Cohesion: 0.1
 Nodes (10): apply_logit_mask(), get_batch_logps(), Test Manual: T5Gemma2 Seq2Seq + Vision ORPO dengan Vanilla Transformers (Tanpa U, Forward hook di lm_head: logits[suppress] += -10000 (decoder only)., Sum log-probabilitas token (mask -100 diabaikan). Seq2Seq: logits & labels same, Collator ORPO + Vision untuk T5Gemma2 (vanilla transformers).      Setiap sample, Custom ORPO Trainer untuk Seq2Seq + Vision T5Gemma2.      Loss = SFT_loss(chosen, VisionORPOCollator (+2 more)
 
-### Community 36 - "Community 36"
+### Community 35 - "Community 35"
 Cohesion: 0.1
 Nodes (20): A Guide to Reinforcement Learning Post-Training for LLMs: PPO, DPO, GRPO, and Beyond, Advantage Estimation and Critic Network, Definitions, Direct Preference Optimization (DPO), Drift KL Penalty, GRPO, KL Divergence Clarification, KL Estimators and Gradient Pitfall (+12 more)
+
+### Community 36 - "Community 36"
+Cohesion: 0.1
+Nodes (20): Patch release v5.10.2, Patch release v5.10.4, Patch release v5.12.1, Patch release v5.5.1, Patch release v5.5.4, Patch release v5.6.1, Patch release v5.6.2, Patch release v5.8.1 (+12 more)
 
 ### Community 37 - "Community 37"
 Cohesion: 0.1
@@ -556,60 +556,60 @@ Cohesion: 0.12
 Nodes (16): 1. Fundamental Architecture, 2. Architecture Tree, 3. Tokenizer Analysis (Gemma 3 vs T5Gemma2), 4. Merged Attention: Mekanisme Inti Decoder, 6. Dimensi & Kompatibilitas "Cangkok", 7. Normalization & Layer Naming, A. Gemma 3 (Multimodal Decoder-Only), Analisis Kompatibilitas (+8 more)
 
 ### Community 43 - "Community 43"
-Cohesion: 0.12
-Nodes (16): Patch release v5.10.2, Patch release v5.10.4, Patch release v5.12.1, Patch release v5.5.1, Patch release v5.6.1, Patch release v5.6.2, Patch release v5.8.1, Release v5.10.1 (+8 more)
-
-### Community 44 - "Community 44"
 Cohesion: 0.17
 Nodes (16): _active_merge_device(), _apply_fused_expert_lora_delta(), _detect_moe_perexpert_scheme(), _merge_moe_expert_quant_aware(), _merge_moe_experts_file(), _merge_moe_fused_down_proj_expert(), _merge_moe_fused_gate_up_expert(), Read one expert weight (dequantising via the quant registry), apply     `merge_f (+8 more)
 
-### Community 45 - "Community 45"
+### Community 44 - "Community 44"
 Cohesion: 0.12
 Nodes (15): 🔍 Analisis Revised: Mengapa Old Text-Only Validation Juga Hancur?, 🔴 BUG #1 — `Seq2SeqVisionCollator`: Tokenisasi Input Ganda BOS/EOS yang Salah, 🔴 BUG #2 — `VisionORPOTrainer.compute_loss`: Encoder dipanggil langsung dengan `pixel_values` yang TIDAK di-support, 🔴 BUG #3 — `CustomSeq2SeqTrainer.evaluate()` di vision: `for_inference` TIDAK dipanggil sebelum generate, 🟠 BUG #4 — Dataset Text-Only Validation di Vision: Format Salah untuk Collator, 🟠 BUG #5 — `tokenizer` vs `processor.tokenizer`: Dua Objek Berbeda, Satu Dipakai untuk Eval Text-Only, code:python (tokenizer = get_chat_template(tokenizer, chat_template="gemm), code:python (tokenizer.add_bos_token = False) (+7 more)
 
-### Community 46 - "Community 46"
+### Community 45 - "Community 45"
 Cohesion: 0.12
 Nodes (15): Assistant:, Assistant:, Assistant:, Assistant:, Assistant:, Hubungan SimPO vs DPO, Implikasi Spesifik untuk T5Gemma2-Instruct, Masalah Fundamental: Semua Ini Dirancang untuk Decoder-Only (+7 more)
 
-### Community 47 - "Community 47"
+### Community 46 - "Community 46"
 Cohesion: 0.12
 Nodes (15): 1. Status Dukungan Seq2Seq di Unsloth, 2. Perbaikan/Patch yang Diterapkan, 3. Contoh Kode Pengetesan Finetuning yang Berhasil, A. Isu `NameError` saat Memuat Model (Unsloth `_utils.py`), B. Isu `ImportError` dari PEFT (`import_utils.py`), C. Isu Mismatch Dimensi Loss pada Trainer (Unsloth `_utils.py`), code:bash (pip install --force-reinstall --no-deps "git+https://github.), code:python (try:) (+7 more)
 
-### Community 48 - "Community 48"
+### Community 47 - "Community 47"
 Cohesion: 0.12
 Nodes (16): Audio, Breaking changes, Bugfixes and improvements, Cache, New Model additions, OpenAI Privacy Filter, Parallelization, QianfanOCR (+8 more)
 
-### Community 49 - "Community 49"
+### Community 48 - "Community 48"
 Cohesion: 0.12
 Nodes (16): AsyncGRPO rollout worker now runs in a separate process, Bidirectional masked importance sampling (MIS) for IcePop, code:python, code:python, code:python, Cross-tokenizer alignment in GOLD via byte offsets, Decoupled self-distillation trainers, Distributed backend boilerplate, hidden (+8 more)
 
-### Community 50 - "Community 50"
+### Community 49 - "Community 49"
 Cohesion: 0.13
 Nodes (14): 1. Pemetaan Processor, 2. Token Awal Gambar (Beginning of Image Token), 3. Contoh Implementasi & Pengujian, 4. Analisis Perilaku Pengulangan (Repetition), 5. Pemrosesan Banyak Gambar (Multiple Images), Analisis Token Gambar (Image Token) pada T5-Gemma-2, Cara Penggunaan:, code:python (from transformers import AutoProcessor) (+6 more)
 
-### Community 51 - "Community 51"
+### Community 50 - "Community 50"
 Cohesion: 0.13
 Nodes (14): 1. Tabel Perbandingan Tokenizer & Token Kontrol, 2. Temuan Utama & Analisis Perubahan, 3. Implementasi Kustom Chat Template untuk T5Gemma-2, A. Perubahan Sintaks Penanda Turn (Turn Markers), Analisis dan Perbandingan Tokenizer & Chat Template: Gemma 3, Gemma 4, dan T5Gemma-2, B. Dukungan Penalaran Berantai (Chain-of-Thought) Natif pada Gemma 4, C. Protokol Tool Calling & Agentic Native (Gemma 4), code:jinja ({%- if ns.first_user and ns.found_system -%}) (+6 more)
 
-### Community 52 - "Community 52"
+### Community 51 - "Community 51"
 Cohesion: 0.13
 Nodes (15): 35% faster packing, Asynchronous GRPO, code:python, code:python, code:python, code:python, Divergence Proximal Policy Optimization (DPPO), Features (+7 more)
+
+### Community 52 - "Community 52"
+Cohesion: 0.16
+Nodes (14): check_hf_model_exists(), check_local_model_exists(), check_model_quantization_status(), determine_base_model_source(), _is_fp8_quant_config(), Check if model exists on HuggingFace, Check if model exists locally with case insensitive naming patterns.     Returns, True for a dense 8-bit FP8 scheme (finegrained_fp8, fbgemm_fp8, compressed-tenso (+6 more)
 
 ### Community 53 - "Community 53"
 Cohesion: 0.15
 Nodes (14): _build_valid_prefixes(), _convert_lora_keys_to_safetensor_format(), _count_backed_lora_modules(), detect_keys_format(), _get_checkpoint_conversion_mapping(), _infer_prefix_and_remap(), _lora_key_has_backing(), Get a model class's _checkpoint_conversion_mapping ({} if absent). (+6 more)
 
 ### Community 54 - "Community 54"
-Cohesion: 0.16
-Nodes (14): check_hf_model_exists(), check_local_model_exists(), check_model_quantization_status(), determine_base_model_source(), _is_fp8_quant_config(), Check if model exists on HuggingFace, Check if model exists locally with case insensitive naming patterns.     Returns, True for a dense 8-bit FP8 scheme (finegrained_fp8, fbgemm_fp8, compressed-tenso (+6 more)
-
-### Community 55 - "Community 55"
 Cohesion: 0.22
 Nodes (11): Conversation, encode_image_to_base64(), extract_json_block(), generate_chat_for_images(), main(), OpenAgenticClient, Memastikan role bergantian user, assistant, user, assistant dst., Mengonversi file gambar ke string base64. (+3 more)
 
-### Community 56 - "Community 56"
+### Community 55 - "Community 55"
 Cohesion: 0.14
 Nodes (11): build_prompt(), load_real_images(), make_labels(), make_synthetic_image(), Test Manual: T5Gemma2 Seq2Seq + Vision dengan Vanilla Transformers (Tanpa Unslot, Target decoder: content + EOS (tanpa BOS). Pad -100 dilakukan di collator., Collator Seq2Seq + Vision untuk T5Gemma2 (vanilla transformers).      - Encoder, Buat gambar dummy berwarna untuk testing (fallback jika dataset real tidak ada). (+3 more)
+
+### Community 56 - "Community 56"
+Cohesion: 0.15
+Nodes (14): _extract_lora_from_wrapper(), _extract_lora_weights(), forward_native_moe_loop(), _has_lora_adapters(), _is_moe_experts_module(), _patched_param_wrapper_forward(), Generic check for an MoE experts layer with stacked 3D expert weights.      Matc, Patched ParamWrapper.forward for MoE separated LoRA.      For MoE experts: bypas (+6 more)
 
 ### Community 57 - "Community 57"
 Cohesion: 0.21
@@ -657,7 +657,7 @@ Nodes (9): 1. Latar Belakang & Kebutuhan Kuantisasi, 2. Masalah yang Ditemukan (
 
 ### Community 68 - "Community 68"
 Cohesion: 0.17
-Nodes (11): 18. Daftar File yang Dibuat, 1. Arsitektur T5Gemma2 vs Gemma 3, Catatan Variasi Ukuran, Daftar Isi, HF Repos, [MASTER] Analisis Vision T5Gemma2, Cangkok SigLIP & Strategi Training Vision, Merged Attention: Mekanisme Inti Decoder T5Gemma2, Perbandingan Fundamental (+3 more)
+Nodes (11): 11. Verifikasi 3-Arah Bobot Vision, 16. EOS Ganda & image_token_index, Analisis, Daftar Isi, EOS: TIDAK Perlu Ikut Gemma 3, Hasil, image_token_index: TIDAK Perlu Ikut Gemma 3, [MASTER] Analisis Vision T5Gemma2, Cangkok SigLIP & Strategi Training Vision (+3 more)
 
 ### Community 69 - "Community 69"
 Cohesion: 0.17
@@ -701,11 +701,11 @@ Nodes (11): code:python, code:python, code:python, code:bash, Features, KTO ↔ 
 
 ### Community 79 - "Community 79"
 Cohesion: 0.18
-Nodes (11): Chat with Files / RAG (Experimental), code:block3, code:block4, DiffusionGemma + Gemma 4 MTP + Audio, Hub + Download Manager (Experimental), Local Chat, Tools & API Compatibility, New Update Button + Hardware Support, Release v0.1.464-beta (+3 more)
+Nodes (11): Better context length algorithm, Chat Canvas, Forking & Queueing, code:block1, code:block2, Hardware & Backend, Hub (Redesigned), Logging and API, Models & Inference (+3 more)
 
 ### Community 80 - "Community 80"
 Cohesion: 0.18
-Nodes (11): Better context length algorithm, Chat Canvas, Forking & Queueing, code:block1, code:block2, Hardware & Backend, Hub (Redesigned), Logging and API, Models & Inference (+3 more)
+Nodes (11): Chat with Files / RAG (Experimental), code:block3, code:block4, DiffusionGemma + Gemma 4 MTP + Audio, Hub + Download Manager (Experimental), Local Chat, Tools & API Compatibility, New Update Button + Hardware Support, Release v0.1.464-beta (+3 more)
 
 ### Community 81 - "Community 81"
 Cohesion: 0.22
@@ -732,12 +732,12 @@ Cohesion: 0.2
 Nodes (10): Breaking changes, Bugfixes and improvements, Cache, Gemma4, MusicFlamingo, New Model additions, NomicBERT, Release v5.5.0 (+2 more)
 
 ### Community 87 - "Community 87"
-Cohesion: 0.28
-Nodes (9): _fold_perexpert_lora_into_fused(), _is_bnb_4bit_base(), _merge_and_overwrite_lora_mxfp4(), _merge_lora(), _mxfp4_base_returns_transposed(), DoRA on MoE experts is not yet supported: the expert merge helpers fold only the, Whether the resolved base convert_moe_packed_tensors already returns the     tra, Fold per-expert Linear LoRA into a dequantized fused 3D expert group.      gpt-o (+1 more)
-
-### Community 88 - "Community 88"
 Cohesion: 0.25
 Nodes (9): _detect_moe_lora_layout(), _merge_moe_down_proj_expert(), _merge_moe_gate_expert(), _merge_moe_gate_or_up_expert(), _merge_moe_up_expert(), Walk module.base_layer for num_experts; bounded so cycles cannot hang., Shape-classify as 'swapped' / 'standard' / 'unknown'; returns (layout, r)., Per-expert merge for gate_proj/up_proj (role='gate' -> first I, 'up' -> last I). (+1 more)
+
+### Community 88 - "Community 88"
+Cohesion: 0.28
+Nodes (9): _fold_perexpert_lora_into_fused(), _is_bnb_4bit_base(), _merge_and_overwrite_lora_mxfp4(), _merge_lora(), _mxfp4_base_returns_transposed(), DoRA on MoE experts is not yet supported: the expert merge helpers fold only the, Whether the resolved base convert_moe_packed_tensors already returns the     tra, Fold per-expert Linear LoRA into a dequantized fused 3D expert group.      gpt-o (+1 more)
 
 ### Community 89 - "Community 89"
 Cohesion: 0.22
@@ -793,115 +793,115 @@ Nodes (8): _base_grouped_mm(), forward_native_grouped_mm(), _get_base_weight(), 
 
 ### Community 102 - "Community 102"
 Cohesion: 0.25
-Nodes (8): Planner Response, Planner Response, Planner Response, Planner Response, Summary Root Cause yang Sebenarnya, === TEXT-ONLY: SFT final trainer state ===, User Input, Yang Menarik Justru Sebaliknya
+Nodes (8): _apply_lora_grouped_mm(), forward_triton_grouped_gemm(), _get_routing_indices(), Grouped-GEMM MoE forward via Triton kernels (torch.compile-compatible, mode="max, Compute token->expert mapping for grouped GEMM.      Returns (token_counts_by_ex, Fused SiLU + element-wise multiply for gate/up projections., Apply LoRA via grouped GEMM: result = ((X @ B) @ A) * scaling.      inputs (tota, _silu_and_mul()
 
 ### Community 103 - "Community 103"
 Cohesion: 0.25
-Nodes (8): 12. Cangkok SigLIP + Projector, code:block17 (Source (Gemma 3 IT): 439 vision params), code:block18 (Source (Gemma 3):           Target (T5Gemma2):), Hasil, Path Mapping Cangkok, Proses, Repo Cangkok, Script: `scripts/tests/verify_vision_weights_3way.py` (cell cangkok, dijalankan di Molab)
+Nodes (8): Planner Response, Planner Response, Planner Response, Planner Response, Summary Root Cause yang Sebenarnya, === TEXT-ONLY: SFT final trainer state ===, User Input, Yang Menarik Justru Sebaliknya
 
 ### Community 104 - "Community 104"
 Cohesion: 0.25
-Nodes (8): 6. Isu Seq2Seq di Unsloth & TRL, code:block5 (FastLanguageModel + Seq2SeqTrainer (HF native) + DataCollato), code:block6 (FastVisionModel + SFTTrainer (TRL) + UnslothVisionDataCollat), code:python (if not hasattr(model.config, "text_config"):), CustomORPOTrainer (Text-Only v6 Sudah Seq2Seq), Root Cause, Solusi: Vanilla Seq2Seq Approach, Text-Only v6 (Berhasil) vs Vision v6 Awal (Bermasalah)
+Nodes (8): 17. Strategi Vision Training Final, Alur Training, code:python (MODEL_NAME = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4), code:python (finetune_vision_layers=False,      # SKIP vision tower (suda), code:block26 (daruokta/...v4-vision-cangkok (v6 text + SigLIP/projector Ge), Config (`working-molab-v6-vision-unsloth.py`), Komponen Training, LoRA Strategy
 
 ### Community 105 - "Community 105"
 Cohesion: 0.25
-Nodes (8): 17. Strategi Vision Training Final, Alur Training, code:python (MODEL_NAME = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4), code:python (finetune_vision_layers=False,      # SKIP vision tower (suda), code:block26 (daruokta/...v4-vision-cangkok (v6 text + SigLIP/projector Ge), Config (`working-molab-v6-vision-unsloth.py`), Komponen Training, LoRA Strategy
+Nodes (8): 6. Isu Seq2Seq di Unsloth & TRL, code:block5 (FastLanguageModel + Seq2SeqTrainer (HF native) + DataCollato), code:block6 (FastVisionModel + SFTTrainer (TRL) + UnslothVisionDataCollat), code:python (if not hasattr(model.config, "text_config"):), CustomORPOTrainer (Text-Only v6 Sudah Seq2Seq), Root Cause, Solusi: Vanilla Seq2Seq Approach, Text-Only v6 (Berhasil) vs Vision v6 Awal (Bermasalah)
 
 ### Community 106 - "Community 106"
 Cohesion: 0.25
-Nodes (7): Citations, code:python (from transformers import pipeline), code:bibtex (@software{vonwerra2020trl,), Framework versions, Model Card for test_vision_output, Quick start, Training procedure
+Nodes (8): 12. Cangkok SigLIP + Projector, code:block17 (Source (Gemma 3 IT): 439 vision params), code:block18 (Source (Gemma 3):           Target (T5Gemma2):), Hasil, Path Mapping Cangkok, Proses, Repo Cangkok, Script: `scripts/tests/verify_vision_weights_3way.py` (cell cangkok, dijalankan di Molab)
 
 ### Community 107 - "Community 107"
 Cohesion: 0.25
-Nodes (7): Citations, code:python (from transformers import pipeline), code:bibtex (@software{vonwerra2020trl,), Framework versions, Model Card for sft, Quick start, Training procedure
+Nodes (7): Citations, code:python (from transformers import pipeline), code:bibtex (@software{vonwerra2020trl,), Framework versions, Model Card for test_vision_output, Quick start, Training procedure
 
 ### Community 108 - "Community 108"
 Cohesion: 0.25
-Nodes (8): Add Parakeet-RNNT (#46331), Bugfixes and improvements, MiniMax-M3-VL, New Model additions, PP-OCRv6: update documentation and slow tests (#46576), Release v5.11.0, Release v5.12.0, Significant community contributions
+Nodes (7): Citations, code:python (from transformers import pipeline), code:bibtex (@software{vonwerra2020trl,), Framework versions, Model Card for sft, Quick start, Training procedure
 
 ### Community 109 - "Community 109"
+Cohesion: 0.25
+Nodes (8): Add Parakeet-RNNT (#46331), Bugfixes and improvements, MiniMax-M3-VL, New Model additions, PP-OCRv6: update documentation and slow tests (#46576), Release v5.11.0, Release v5.12.0, Significant community contributions
+
+### Community 110 - "Community 110"
 Cohesion: 0.29
 Nodes (7): calculate_combined_score(), _choose_mxfp4_processing_strategy(), format_bytes(), get_memory_stats(), Get current memory statistics for CPU and GPU, Convert bytes to human readable format, Choose optimal device and chunk size for mxfp4 dequantization based on available
 
-### Community 110 - "Community 110"
+### Community 111 - "Community 111"
 Cohesion: 0.38
 Nodes (5): buggy_infer(), main(), make_patched(), Validasi logika workaround `_infer_prefix_and_remap` UnboundLocalError.  Mensimu, # NOTE: TIDAK ada `unmatched_keys = []` di sini (inilah bug-nya). Versi riil
 
-### Community 111 - "Community 111"
+### Community 112 - "Community 112"
 Cohesion: 0.48
 Nodes (6): analyze_file(), ConvStats, count_tokens(), main(), Analisis statistik perbandingan dataset nested chat instruct:   - t5-gemma-2-cha, summarize()
 
-### Community 112 - "Community 112"
+### Community 113 - "Community 113"
 Cohesion: 0.43
 Nodes (6): conversations_to_sft_rows(), default_system_prompt(), main(), parse_system_and_turns(), Flatten baris JSONL dengan struktur seperti `t5-gemma-2-chat-instruct-dataset.js, Ekstrak system string dan list (user, assistant) lengkap per giliran.
 
-### Community 113 - "Community 113"
+### Community 114 - "Community 114"
 Cohesion: 0.48
 Nodes (6): build_generation_prompt(), call_api(), generate_indoqa_batch(), main(), parse_json_loose(), [Phase 3.4] Generate IndoQA v2 — Ekspansi Domain (Hukum, Bisnis, Teknis, Berita)
 
-### Community 114 - "Community 114"
+### Community 115 - "Community 115"
 Cohesion: 0.48
 Nodes (6): build_generation_prompt(), call_api(), generate_longform_batch(), main(), parse_json_loose(), [Phase 3.2] Generate Long-Form Output Dataset Bahasa Indonesia =================
 
-### Community 115 - "Community 115"
+### Community 116 - "Community 116"
 Cohesion: 0.43
 Nodes (6): Conversation, generate_conversation(), main(), Cek apakah role selang-seling., Turn, validate_conversation_logic()
 
-### Community 116 - "Community 116"
+### Community 117 - "Community 117"
 Cohesion: 0.48
 Nodes (4): extract_json_block(), main(), OpenAgenticClient, TestSchema
 
-### Community 117 - "Community 117"
+### Community 118 - "Community 118"
 Cohesion: 0.43
 Nodes (6): load_model(), main(), parse_args(), Translate dataset EN → ID menggunakan translategemma-12b GGUF. =================, Translate teks EN ke ID. Gunakan cache jika sudah ada., translate_to_id()
 
-### Community 118 - "Community 118"
+### Community 119 - "Community 119"
 Cohesion: 0.38
 Nodes (6): get_activation_cache(), main(), Manual Mechanistic Interpretability via PyTorch Hooks Sebagai alternatif Transfo, Menjalankan model dan mencatat aktivasi di setiap layer yang diinginkan.     Ini, Menjalankan model dan MENGGANTI (mencangkok) aktivasi di layer tertentu.     Ini, run_activation_patching()
 
-### Community 119 - "Community 119"
+### Community 120 - "Community 120"
 Cohesion: 0.29
 Nodes (7): Assistant, code:json ({), code:block151 (Edit applied successfully.), code:json ({), code:block153 (Edit applied successfully.), code:json ({), code:block155 (Edit applied successfully.)
 
-### Community 120 - "Community 120"
+### Community 121 - "Community 121"
 Cohesion: 0.29
 Nodes (6): 1. Status Token Percakapan (Chat Tokens), 2. Perbedaan Versi Base dan Instruct, 3. Analisis Jinja Chat Template Gemma 3, Analisis Tokenizer dan Format Chat Gemma 3 & T5-Gemma-2, code:python (with open("path/to/chat_template.jinja", "r") as f:), Planning untuk v5
 
-### Community 121 - "Community 121"
+### Community 122 - "Community 122"
 Cohesion: 0.29
 Nodes (6): code:block1 (┌───────────────────────────────────────────────────────────), Daftar Metrik yang Dijelaskan, ✅ Kesimpulan untuk Training Anda, Penjelasan Lengkap Metrik Training SFT — Bahasa Sederhana, 📊 Ringkasan: Hubungan Antar Metrik, 🎯 Urutan dari Paling Ketat ke Paling Fleksibel
 
-### Community 122 - "Community 122"
+### Community 123 - "Community 123"
 Cohesion: 0.29
 Nodes (6): code:python (from datasets import load_dataset), Dataset Description, Dataset Structure, Statistics, T5Gemma-2 Indonesian Chat & QA Dataset, Usage
 
-### Community 123 - "Community 123"
+### Community 124 - "Community 124"
 Cohesion: 0.29
 Nodes (7): 7. Validasi Vanilla Seq2Seq + Vision, Bug Fix Penting: Collator pixel_values, code:block8 (ValueError: Image features and image tokens do not match: to), code:python (class Seq2SeqVisionCollator:), Hasil Validasi, Seq2SeqVisionCollator (Custom), Test: `scripts/tests/test_vanilla_seq2seq_vision.py`
 
-### Community 124 - "Community 124"
+### Community 125 - "Community 125"
 Cohesion: 0.29
 Nodes (7): code:python, Drop, don't truncate, overlong tool results in `GRPOTrainer`, Expanded tool-calling model support: LLaMA 3.1 / 3.2 & DeepSeek-V3, Features, KTO/DPO alignment push, New `SSDTrainer` — Simple Self-Distillation, Other
 
-### Community 125 - "Community 125"
+### Community 126 - "Community 126"
 Cohesion: 0.4
 Nodes (4): audit_and_fix_train_vision(), Audit & fix task-prefix issues di data multimodal T5Gemma2 instruct project.  Ma, Hapus <unusedX> berturut-turut di awal string (+ spasi setelahnya)., strip_leading_prefix()
 
-### Community 126 - "Community 126"
+### Community 127 - "Community 127"
 Cohesion: 0.53
 Nodes (5): analyze_file(), format_encoder_from_raw(), main(), print_stats(), Analyze exact token length distributions of dataset inputs and targets.
 
-### Community 127 - "Community 127"
+### Community 128 - "Community 128"
 Cohesion: 0.53
 Nodes (5): analyze(), compare_all(), load_tokenizer(), main(), Analisis perbandingan tiga tokenizer: Gemma 3, Gemma 4, dan T5Gemma2.
 
-### Community 128 - "Community 128"
+### Community 129 - "Community 129"
 Cohesion: 0.6
 Nodes (5): conversations_to_sft_rows(), default_system_prompt(), format_encoder_from_raw(), main(), parse_system_and_turns()
-
-### Community 129 - "Community 129"
-Cohesion: 0.33
-Nodes (6): Assistant, code:json ({), code:block78 (User has answered your questions: "Arsitektur pipeline: pert), Research recommendations:, 🚩 Yang menurut saya KURANG TEPAT di dokumen risetmu, ✅ Yang saya SETUJU & valid
 
 ### Community 130 - "Community 130"
 Cohesion: 0.33
@@ -909,35 +909,35 @@ Nodes (6): Assistant, code:python (_optimizer = create_optimizer(...) if OPTIMIZ
 
 ### Community 131 - "Community 131"
 Cohesion: 0.33
-Nodes (6): 1. Train Loss & Eval Loss (Cross-Entropy Loss), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
+Nodes (6): Assistant, code:json ({), code:block78 (User has answered your questions: "Arsitektur pipeline: pert), Research recommendations:, 🚩 Yang menurut saya KURANG TEPAT di dokumen risetmu, ✅ Yang saya SETUJU & valid
 
 ### Community 132 - "Community 132"
 Cohesion: 0.33
-Nodes (6): 5. METEOR (Metric for Evaluation of Translation with Explicit ORdering), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
+Nodes (6): 6. BERTScore F1, 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
 
 ### Community 133 - "Community 133"
 Cohesion: 0.33
-Nodes (6): 4. BLEU (Bilingual Evaluation Understudy), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
+Nodes (6): 5. METEOR (Metric for Evaluation of Translation with Explicit ORdering), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
 
 ### Community 134 - "Community 134"
 Cohesion: 0.33
-Nodes (6): 2. Perplexity (PPL), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
+Nodes (6): 1. Train Loss & Eval Loss (Cross-Entropy Loss), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
 
 ### Community 135 - "Community 135"
 Cohesion: 0.33
-Nodes (6): 6. BERTScore F1, 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
+Nodes (6): 7. Exact Match (EM), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
 
 ### Community 136 - "Community 136"
 Cohesion: 0.33
-Nodes (6): 7. Exact Match (EM), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
+Nodes (6): 2. Perplexity (PPL), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
 
 ### Community 137 - "Community 137"
 Cohesion: 0.33
-Nodes (6): 1. DPO (Direct Preference Optimization), 2. ORPO (Odds Ratio Preference Optimization), 3. CPO (Contrastive Preference Optimization), 4. SimPO (Simple Preference Optimization), 5. KTO (Kahneman-Tversky Optimization), Assistant:
+Nodes (6): 4. BLEU (Bilingual Evaluation Understudy), 💡 Analogi, 📊 Cara Baca, 🎯 Di Laporan Anda, 🧠 Logika Pengukuran, 📌 Ngukur Apa?
 
 ### Community 138 - "Community 138"
 Cohesion: 0.33
-Nodes (6): 8. Validasi Vanilla ORPO Vision, code:python (class VisionORPOTrainer(Seq2SeqTrainer):), Hasil Validasi, Test: `scripts/tests/test_vanilla_orpo_vision.py`, URSLA Shortcut Risk, VisionORPOTrainer (Custom)
+Nodes (6): 1. DPO (Direct Preference Optimization), 2. ORPO (Odds Ratio Preference Optimization), 3. CPO (Contrastive Preference Optimization), 4. SimPO (Simple Preference Optimization), 5. KTO (Kahneman-Tversky Optimization), Assistant:
 
 ### Community 139 - "Community 139"
 Cohesion: 0.33
@@ -949,67 +949,67 @@ Nodes (6): 2. Mekanisme Image Encoder (SigLIP), Cara Kerja Image Pipeline, code:
 
 ### Community 141 - "Community 141"
 Cohesion: 0.33
-Nodes (6): Even more training chat templates, Features, Final logits softcapping for async GRPO, KTO ↔ DPO alignment continues, Other, Trainer telemetry (opt-out)
+Nodes (6): 8. Validasi Vanilla ORPO Vision, code:python (class VisionORPOTrainer(Seq2SeqTrainer):), Hasil Validasi, Test: `scripts/tests/test_vanilla_orpo_vision.py`, URSLA Shortcut Risk, VisionORPOTrainer (Custom)
 
 ### Community 142 - "Community 142"
 Cohesion: 0.33
-Nodes (6): code:block10, code:block9, macOS, Linux, WSL:, Release v0.1.43-beta, To update Unsloth or install a new Unsloth Studio, you must use:, Windows:
+Nodes (6): Even more training chat templates, Features, Final logits softcapping for async GRPO, KTO ↔ DPO alignment continues, Other, Trainer telemetry (opt-out)
 
 ### Community 143 - "Community 143"
+Cohesion: 0.33
+Nodes (6): code:block10, code:block9, macOS, Linux, WSL:, Release v0.1.43-beta, To update Unsloth or install a new Unsloth Studio, you must use:, Windows:
+
+### Community 144 - "Community 144"
 Cohesion: 0.5
 Nodes (4): main(), Commit Batch Perbaikan Dataset Vision ====================================== Bac, Validasi record perbaikan. Return (ok, errors)., validate_record()
 
-### Community 144 - "Community 144"
+### Community 145 - "Community 145"
 Cohesion: 0.6
 Nodes (4): has_issues(), load_vision_records(), main(), Generate Batch untuk Perbaikan Dataset Vision ==================================
 
-### Community 146 - "Community 146"
+### Community 147 - "Community 147"
 Cohesion: 0.4
 Nodes (5): _build_cross_shard_fp8_index(), _fp8_dequantize_weight(), _merge_and_overwrite_lora_fp8(), Dequantize one FP8 weight; return (W_real, [scale_keys to drop]).      Raises if, {key: (filename, dtype)} for tensors in the OTHER *.safetensors shards (headers
 
-### Community 147 - "Community 147"
+### Community 148 - "Community 148"
 Cohesion: 0.4
 Nodes (5): _count_moe_experts_in_header(), Expert count (max per-expert index + 1) for ``prefix`` under ``scheme`` in the s, Expert count for ``prefix``, preferring the authoritative source: the live modul, _resolve_moe_num_experts(), _resolve_moe_num_experts_with_header()
 
-### Community 148 - "Community 148"
+### Community 149 - "Community 149"
 Cohesion: 0.4
 Nodes (3): Event hook to strip 'data: [DONE]' from the end of responses., response_hook(), TestSchema
 
-### Community 149 - "Community 149"
+### Community 150 - "Community 150"
 Cohesion: 0.7
 Nodes (4): convert_jsonl_to_hf_format(), main(), parse_conversations(), push_subset()
 
-### Community 150 - "Community 150"
+### Community 151 - "Community 151"
 Cohesion: 0.7
 Nodes (4): load_jsonl_samples(), main(), push_config(), update_readme()
 
-### Community 151 - "Community 151"
+### Community 152 - "Community 152"
 Cohesion: 0.6
 Nodes (4): build_prompt_up_to_turn(), generate_response(), main(), Membangun prompt multi-turn dari percakapan dari indeks 0 hingga turn_limit (eks
 
-### Community 152 - "Community 152"
+### Community 153 - "Community 153"
 Cohesion: 0.6
 Nodes (4): _call_8bit_base_layer(), lora_forward(), 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, unsloth_forward()
 
-### Community 153 - "Community 153"
+### Community 154 - "Community 154"
 Cohesion: 0.4
 Nodes (5): Bug #3 — Ini kode kamu, bukan Unsloth, Bug #4 — Ini inkonsistensi di kode kamu sendiri, Bug #5 — Ini hyperparameter pilihan kamu, Bukan Unsloth yang Bermasalah — Ini Bug di Kode Training Kamu Sendiri, code:python (# ✅ Text-only (working-molab-v6-unsloth.py) — BENAR:)
 
-### Community 154 - "Community 154"
-Cohesion: 0.4
-Nodes (5): Assistant, code:json ({), code:block29 (Edit applied successfully.), code:json ({), code:block31 (Edit applied successfully.)
-
 ### Community 155 - "Community 155"
 Cohesion: 0.4
-Nodes (5): Assistant, code:python (@app.cell), code:python (if current_stage == "orpo":), code:json ({), code:block6 (Edit applied successfully.)
+Nodes (5): Assistant, code:json ({), code:block204 (Edit applied successfully.), code:json ({), code:block206 (Edit applied successfully.)
 
 ### Community 156 - "Community 156"
 Cohesion: 0.4
-Nodes (5): Assistant, code:json ({), code:block190 (Edit applied successfully.), code:json ({), code:block192 (Edit applied successfully.)
+Nodes (5): Assistant, code:python (if ENABLE_STEERING: target = (UNIFIED_HF_REPO, subfolder=STE), code:block113 (if _has(final/merged_bf16): done), code:json ({), code:block115 (Edit applied successfully.)
 
 ### Community 157 - "Community 157"
 Cohesion: 0.4
-Nodes (5): Assistant, code:json ("task_prefix_mapping": {), code:python (_LAYERS_G = min(t5.decoder layers, gemma layers)), code:json ({), code:block109 (Edit applied successfully.)
+Nodes (5): Assistant, code:json ({), code:block200 (Edit applied successfully.), code:json ({), code:block202 (Edit applied successfully.)
 
 ### Community 158 - "Community 158"
 Cohesion: 0.4
@@ -1017,27 +1017,27 @@ Nodes (5): Assistant, code:python (force_branch = group.get("force_branch", None
 
 ### Community 159 - "Community 159"
 Cohesion: 0.4
-Nodes (5): Assistant, code:json ({), code:block204 (Edit applied successfully.), code:json ({), code:block206 (Edit applied successfully.)
+Nodes (5): Assistant, code:json ({), code:block29 (Edit applied successfully.), code:json ({), code:block31 (Edit applied successfully.)
 
 ### Community 160 - "Community 160"
 Cohesion: 0.4
-Nodes (5): Alur baru, code:block182 (google/t5gemma-2-4b-4b), 🎛️ CONTROL CENTER (cell ke-2, tepat di atas), Keputusan riset yang saya koreksi, Ringkasan hasil kerja
+Nodes (5): Assistant, code:json ({), code:block190 (Edit applied successfully.), code:json ({), code:block192 (Edit applied successfully.)
 
 ### Community 161 - "Community 161"
 Cohesion: 0.4
-Nodes (5): Assistant, code:python (if ENABLE_STEERING: target = (UNIFIED_HF_REPO, subfolder=STE), code:block113 (if _has(final/merged_bf16): done), code:json ({), code:block115 (Edit applied successfully.)
+Nodes (5): Assistant, code:python (@app.cell), code:python (if current_stage == "orpo":), code:json ({), code:block6 (Edit applied successfully.)
 
 ### Community 162 - "Community 162"
 Cohesion: 0.4
-Nodes (5): Assistant, code:json ({), code:block200 (Edit applied successfully.), code:json ({), code:block202 (Edit applied successfully.)
+Nodes (5): Alur baru, code:block182 (google/t5gemma-2-4b-4b), 🎛️ CONTROL CENTER (cell ke-2, tepat di atas), Keputusan riset yang saya koreksi, Ringkasan hasil kerja
 
 ### Community 163 - "Community 163"
 Cohesion: 0.4
-Nodes (5): Analisis per Algoritma untuk Konteks T5Gemma2-Instruct, DPO — Tidak Direkomendasikan, KTO — Paling Fleksibel untuk Data, ORPO — Paling Kompatibel Secara Arsitektur, SimPO — Secara Teori Paling Bersih, Tapi Ada Caveat Besar
+Nodes (5): Assistant, code:json ("task_prefix_mapping": {), code:python (_LAYERS_G = min(t5.decoder layers, gemma layers)), code:json ({), code:block109 (Edit applied successfully.)
 
 ### Community 164 - "Community 164"
 Cohesion: 0.4
-Nodes (5): 1. Sequential (paling aman), 2. Hybrid Loss, 3. Gunakan SimPO saja dengan length normalization manual, Cara Menggabungkannya, code:block3 (SFT → DPO → SimPO fine-tune)
+Nodes (5): ✅ Bagus: **KTO**, ⚠️ Pertimbangkan dengan hati-hati: **DPO / ORPO**, Ranking untuk T5Gemma2-Instruct, ❌ Skip dulu: **PPO / GRPO**, ✅ Terbaik: **SimPO**
 
 ### Community 165 - "Community 165"
 Cohesion: 0.4
@@ -1045,11 +1045,11 @@ Nodes (4): Bare Minimum Setup untuk T5/Sequence-to-Sequence (TRL), code:python (
 
 ### Community 166 - "Community 166"
 Cohesion: 0.4
-Nodes (5): ✅ Bagus: **KTO**, ⚠️ Pertimbangkan dengan hati-hati: **DPO / ORPO**, Ranking untuk T5Gemma2-Instruct, ❌ Skip dulu: **PPO / GRPO**, ✅ Terbaik: **SimPO**
+Nodes (5): 1. Sequential (paling aman), 2. Hybrid Loss, 3. Gunakan SimPO saja dengan length normalization manual, Cara Menggabungkannya, code:block3 (SFT → DPO → SimPO fine-tune)
 
 ### Community 167 - "Community 167"
 Cohesion: 0.4
-Nodes (5): 4. Perbandingan Config: T5Gemma2 vs Gemma 3 IT, Chat Template — BEDA Sumber, EOS — BEDA, image_token_index — BEDA, Sliding Window — SAMA
+Nodes (5): Analisis per Algoritma untuk Konteks T5Gemma2-Instruct, DPO — Tidak Direkomendasikan, KTO — Paling Fleksibel untuk Data, ORPO — Paling Kompatibel Secara Arsitektur, SimPO — Secara Teori Paling Bersih, Tapi Ada Caveat Besar
 
 ### Community 168 - "Community 168"
 Cohesion: 0.4
@@ -1060,8 +1060,8 @@ Cohesion: 0.4
 Nodes (5): 3. Soft Token vs Hard Token, Implikasi di T5Gemma2, Kenapa Disebut "Soft Token", Mekanisme Injection, Perbedaan Fundamental
 
 ### Community 170 - "Community 170"
-Cohesion: 0.5
-Nodes (4): Split a file if needed, using temporary names to avoid messy numbering., Split a safetensors file into smaller shards., split_safetensor_file(), split_safetensors_to_shards()
+Cohesion: 0.4
+Nodes (5): 4. Perbandingan Config: T5Gemma2 vs Gemma 3 IT, Chat Template — BEDA Sumber, EOS — BEDA, image_token_index — BEDA, Sliding Window — SAMA
 
 ### Community 171 - "Community 171"
 Cohesion: 0.5
@@ -1069,51 +1069,51 @@ Nodes (4): _copy_file_from_source(), If ALL files exist in the HF cache, copy th
 
 ### Community 172 - "Community 172"
 Cohesion: 0.5
-Nodes (4): _drop_resolved_fp8_scales_after_rewrite(), _fp8_scale_key_weight_bases(), Candidate FP8 weight keys a companion scale belongs to (most specific suffix win, Order-independent cleanup run AFTER every FP8 shard is rewritten: drop each comp
+Nodes (4): Split a file if needed, using temporary names to avoid messy numbering., Split a safetensors file into smaller shards., split_safetensor_file(), split_safetensors_to_shards()
 
 ### Community 173 - "Community 173"
+Cohesion: 0.5
+Nodes (4): _drop_resolved_fp8_scales_after_rewrite(), _fp8_scale_key_weight_bases(), Candidate FP8 weight keys a companion scale belongs to (most specific suffix win, Order-independent cleanup run AFTER every FP8 shard is rewritten: drop each comp
+
+### Community 174 - "Community 174"
 Cohesion: 0.83
 Nodes (3): analyze_data_leakage(), load_and_analyze_file(), main()
 
-### Community 174 - "Community 174"
+### Community 175 - "Community 175"
 Cohesion: 0.67
 Nodes (3): flatten_objects(), main(), Dari satu JSONL nested (biasanya hasil merge), bangun ulang `chat_train.jsonl` +
 
-### Community 175 - "Community 175"
+### Community 176 - "Community 176"
 Cohesion: 0.67
 Nodes (3): load_conversations(), main(), Sample N random full conversations from nested JSONL (base + extra) for manual r
 
-### Community 176 - "Community 176"
+### Community 177 - "Community 177"
 Cohesion: 0.83
 Nodes (3): load_jsonl_samples(), main(), push_orpo_dataset()
 
-### Community 177 - "Community 177"
+### Community 178 - "Community 178"
 Cohesion: 0.83
 Nodes (3): load_jsonl_samples(), main(), push_sft_dataset()
 
-### Community 179 - "Community 179"
+### Community 180 - "Community 180"
 Cohesion: 0.67
 Nodes (3): main(), make_rejected_response(), Generate Synthetic DPO Dataset from SFT Data ===================================
 
-### Community 180 - "Community 180"
+### Community 181 - "Community 181"
 Cohesion: 0.83
 Nodes (3): build_prompt(), generate_response(), main()
-
-### Community 182 - "Community 182"
-Cohesion: 0.67
-Nodes (3): build_prompt(), Bangun prompt format Gemma 3 yang konsisten dengan data training.     System pro, test_inference()
 
 ### Community 183 - "Community 183"
 Cohesion: 0.67
 Nodes (3): build_prompt(), Bangun prompt format Gemma 3 yang konsisten dengan data training.     System pro, test_inference()
 
 ### Community 184 - "Community 184"
+Cohesion: 0.67
+Nodes (3): build_prompt(), Bangun prompt format Gemma 3 yang konsisten dengan data training.     System pro, test_inference()
+
+### Community 185 - "Community 185"
 Cohesion: 0.5
 Nodes (3): merge_and_save(), Merge LoRA Adapter ke Base Model ================================ Menggabungkan, Merge LoRA adapter into base model and save.
-
-### Community 191 - "Community 191"
-Cohesion: 0.67
-Nodes (3): lora_forward(), 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, unsloth_forward()
 
 ### Community 192 - "Community 192"
 Cohesion: 0.67
@@ -1128,56 +1128,56 @@ Cohesion: 0.67
 Nodes (3): lora_forward(), 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, unsloth_forward()
 
 ### Community 195 - "Community 195"
-Cohesion: 0.5
-Nodes (3): forward(), 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, Runs the forward pass.
-
-### Community 196 - "Community 196"
 Cohesion: 0.67
 Nodes (3): lora_forward(), 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, unsloth_forward()
 
-### Community 197 - "Community 197"
+### Community 196 - "Community 196"
 Cohesion: 0.5
-Nodes (4): Assistant, code:python (if vision_model is None:), code:json ({), code:block23 (Edit applied successfully.)
+Nodes (3): forward(), 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, Runs the forward pass.
+
+### Community 197 - "Community 197"
+Cohesion: 0.67
+Nodes (3): lora_forward(), 2026.7.2 2026.7.2 5.13.1 1.8.0 __UNSLOTH_VERSIONING__, unsloth_forward()
 
 ### Community 198 - "Community 198"
 Cohesion: 0.5
-Nodes (4): Assistant, code:block14 (ALL_SUPPRESS_IDS, Any, BF16, CleanNotebookProgressCallback, ), code:json ({), code:block16 (Edit applied successfully.)
+Nodes (4): Assistant, code:python (if vision_model is None:), code:json ({), code:block23 (Edit applied successfully.)
 
 ### Community 199 - "Community 199"
 Cohesion: 0.5
-Nodes (4): Assistant, code:json ({), code:block11 (Edit applied successfully.), code:block9 (ALL_SUPPRESS_IDS, Any, BF16, CleanNotebookProgressCallback, )
+Nodes (4): Assistant, code:block14 (ALL_SUPPRESS_IDS, Any, BF16, CleanNotebookProgressCallback, ), code:json ({), code:block16 (Edit applied successfully.)
 
 ### Community 200 - "Community 200"
 Cohesion: 0.5
-Nodes (4): Assistant, code:block145 (if pipeline_stage in ("done",): model=None), code:json ({), code:block147 (Edit applied successfully.)
+Nodes (4): Assistant, code:json ({), code:block11 (Edit applied successfully.), code:block9 (ALL_SUPPRESS_IDS, Any, BF16, CleanNotebookProgressCallback, )
 
 ### Community 201 - "Community 201"
 Cohesion: 0.5
-Nodes (4): 💡 Analogi, 🔍 Kenapa Loss Naik Tapi Metrik Teks Membagi? (Fenomena di Laporan Anda), Penjelasan Logis, Skenario
+Nodes (4): Assistant, code:block145 (if pipeline_stage in ("done",): model=None), code:json ({), code:block147 (Edit applied successfully.)
 
 ### Community 202 - "Community 202"
 Cohesion: 0.5
-Nodes (4): 1. Penjelasan Bahasa Natural (Natural Intuition), Analogi Sederhana:, Bagaimana Algoritma Task Vector Steering Bekerja?, Mengapa "Cangkok Mentah" (Naive Grafting) Dulu Hancur?
+Nodes (4): 💡 Analogi, 🔍 Kenapa Loss Naik Tapi Metrik Teks Membagi? (Fenomena di Laporan Anda), Penjelasan Logis, Skenario
 
 ### Community 203 - "Community 203"
 Cohesion: 0.5
-Nodes (4): Bagaimana Cara Kerjanya Secara Matematika & Konseptual?, Langkah 1: Ekstraksi Subruang Utama T5Gemma, Langkah 2: Proyeksikan Delta Instruct ke Subruang T5Gemma, Langkah 3: Suntikkan Delta yang Sudah Disaring
+Nodes (4): 1. Penjelasan Bahasa Natural (Natural Intuition), Analogi Sederhana:, Bagaimana Algoritma Task Vector Steering Bekerja?, Mengapa "Cangkok Mentah" (Naive Grafting) Dulu Hancur?
 
 ### Community 204 - "Community 204"
 Cohesion: 0.5
-Nodes (4): 10. "Bocor" LoRA ke Vision Tower, Bocor ≠ Rusak, code:python (LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj), Mekanisme Bocor
+Nodes (4): Bagaimana Cara Kerjanya Secara Matematika & Konseptual?, Langkah 1: Ekstraksi Subruang Utama T5Gemma, Langkah 2: Proyeksikan Delta Instruct ke Subruang T5Gemma, Langkah 3: Suntikkan Delta yang Sudah Disaring
 
 ### Community 205 - "Community 205"
 Cohesion: 0.5
-Nodes (4): 11. Verifikasi 3-Arah Bobot Vision, Analisis, Hasil, Script: `scripts/tests/verify_vision_weights_3way.py` (marimo, dijalankan di Molab)
+Nodes (4): 10. "Bocor" LoRA ke Vision Tower, Bocor ≠ Rusak, code:python (LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj), Mekanisme Bocor
 
 ### Community 206 - "Community 206"
 Cohesion: 0.5
-Nodes (4): 16. EOS Ganda & image_token_index, EOS: TIDAK Perlu Ikut Gemma 3, image_token_index: TIDAK Perlu Ikut Gemma 3, Sliding Window: SAMA
+Nodes (4): 18. Daftar File yang Dibuat, HF Repos, Production Scripts, Test & Validation Scripts
 
 ### Community 207 - "Community 207"
 Cohesion: 0.5
-Nodes (4): Patch release v5.5.4, Release v5.5.1, Release v5.5.2, Release v5.5.3
+Nodes (4): 1. Arsitektur T5Gemma2 vs Gemma 3, Catatan Variasi Ukuran, Merged Attention: Mekanisme Inti Decoder T5Gemma2, Perbandingan Fundamental
 
 ### Community 208 - "Community 208"
 Cohesion: 0.5
@@ -1189,79 +1189,79 @@ Nodes (4): Bug Fixes and more cross platform support, code:block5, code:block6, 
 
 ### Community 235 - "Community 235"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block62 (61bb1fa add vision diagnostic reports, verification scripts,)
+Nodes (3): Assistant, code:json ({), code:block8 ((no output))
 
 ### Community 236 - "Community 236"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block18 ((no output))
+Nodes (3): Assistant, code:json ({), code:block90 (model.decoder                                               )
 
 ### Community 237 - "Community 237"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block159 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block142 (transform OK)
 
 ### Community 238 - "Community 238"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block157 (OK)
+Nodes (3): Assistant, code:json ({), code:block194 (Edit applied successfully.)
 
 ### Community 239 - "Community 239"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block214 ([31;1mdipaksa: [0m)
+Nodes (3): Assistant, code:json ({), code:block196 (Edit applied successfully.)
 
 ### Community 240 - "Community 240"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block196 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block68 (Unstaged changes after reset:)
 
 ### Community 241 - "Community 241"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block58 (git-lfs/3.7.1 (GitHub; windows amd64; go 1.25.1; git b84b338)
+Nodes (3): Assistant, code:json ({), code:block72 ([main 6939959] feat: combined text+vision+cangkok pipeline i)
 
 ### Community 242 - "Community 242"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block179 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block64 (<path>D:\Codings\unsloth-porto\t5-gemma-2\instruct\.gitignor)
 
 ### Community 243 - "Community 243"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block210 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block144 (L 1251 |     if _should_run:)
 
 ### Community 244 - "Community 244"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block8 ((no output))
+Nodes (3): Assistant, code:json ({), code:block208 (critical[unparsable-cells]: Notebook contains unparsable cod)
 
 ### Community 245 - "Community 245"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block237 (NS5: shape=(64, 32) dtype=torch.bfloat16 singular~[min=0.964)
+Nodes (3): Assistant, code:json ({), code:block70 (warning: in the working copy of 'scripts/tests/results/t5gem)
 
 ### Community 246 - "Community 246"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block142 (transform OK)
+Nodes (3): Assistant, code:json ({), code:block171 (Edit applied successfully.)
 
 ### Community 247 - "Community 247"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block90 (model.decoder                                               )
+Nodes (3): Assistant, code:json ({), code:block149 (Edit applied successfully.)
 
 ### Community 248 - "Community 248"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block42 (M working-molab-v6-unsloth.py)
+Nodes (3): Assistant, code:json ({), code:block88 (model.encoder.vision_tower                                  )
 
 ### Community 249 - "Community 249"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block111 (OK)
+Nodes (3): Assistant, code:json ({), code:block18 ((no output))
 
 ### Community 250 - "Community 250"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block72 ([main 6939959] feat: combined text+vision+cangkok pipeline i)
+Nodes (3): Assistant, code:json ({), code:block52 (A  working-molab-v6-combined-unsloth.py)
 
 ### Community 251 - "Community 251"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block66 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block46 (diff --git a/working-molab-v6-unsloth.py b/working-molab-v6-)
 
 ### Community 252 - "Community 252"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block105 (OK)
+Nodes (3): Assistant, code:json ({), code:block50 (main)
 
 ### Community 253 - "Community 253"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block144 (L 1251 |     if _should_run:)
+Nodes (3): Assistant, code:json ({), code:block119 (Edit applied successfully.)
 
 ### Community 254 - "Community 254"
 Cohesion: 0.67
@@ -1269,203 +1269,203 @@ Nodes (3): Assistant, code:json ({), code:block35 (Edit applied successfully.)
 
 ### Community 255 - "Community 255"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block25 (CHECK OK)
+Nodes (3): Assistant, code:json ({), code:block39 (total lines: 5447)
 
 ### Community 256 - "Community 256"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block33 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block218 (Traceback (most recent call last):)
 
 ### Community 257 - "Community 257"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block20 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block54 ([main d243686] feat: combined text+vision+cangkok pipeline i)
 
 ### Community 258 - "Community 258"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block163 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block98 (OK)
 
 ### Community 259 - "Community 259"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block39 (total lines: 5447)
+Nodes (3): Assistant, code:json ({), code:block20 (Edit applied successfully.)
 
 ### Community 260 - "Community 260"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block64 (<path>D:\Codings\unsloth-porto\t5-gemma-2\instruct\.gitignor)
+Nodes (3): Assistant, code:json ({), code:block233 (Traceback (most recent call last):)
 
 ### Community 261 - "Community 261"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block74 (To https://github.com/daruoktab/t5gemma2-instruct.git)
+Nodes (3): Assistant, code:block183 (p.ndim == 2  →  cabang Muon (Newton-Schulz orthogonalization), code:python (PROJECTOR_BRANCH = "muon"    # default sekarang (ikut aturan)
 
 ### Community 262 - "Community 262"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block76 (<path>D:\Codings\unsloth-porto\t5-gemma-2\instruct\docs\Reve)
+Nodes (3): Assistant, code:json ({), code:block92 (Wrote file successfully.)
 
 ### Community 263 - "Community 263"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block121 (critical[invalid-syntax]: 'return' outside function)
+Nodes (3): Assistant, code:json ({), code:block216 (Wrote file successfully.)
 
 ### Community 264 - "Community 264"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block48 ({)
+Nodes (3): Assistant, code:json ({), code:block179 (Edit applied successfully.)
 
 ### Community 265 - "Community 265"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block175 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block220 (Edit applied successfully.)
 
 ### Community 266 - "Community 266"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block212 (MUON_LR_SCALE: 4 | PROJECTOR_BRANCH: 4 | force_branch: 7)
+Nodes (3): Assistant, code:json ({), code:block60 (User has answered your questions: "Push ditolak GitHub karen)
 
 ### Community 267 - "Community 267"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block88 (model.encoder.vision_tower                                  )
+Nodes (3): Assistant, code:json ({), code:block42 (M working-molab-v6-unsloth.py)
 
 ### Community 268 - "Community 268"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block2 ((no output))
+Nodes (3): Assistant, code:json ({), code:block25 (CHECK OK)
 
 ### Community 269 - "Community 269"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block37 (FINAL CHECK OK)
+Nodes (3): Assistant, code:json ({), code:block235 (Edit applied successfully.)
 
 ### Community 270 - "Community 270"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block27 (Found 47 matches)
+Nodes (3): Assistant, code:json ({), code:block167 (Edit applied successfully.)
 
 ### Community 271 - "Community 271"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block181 (exit=0)
+Nodes (3): Assistant, code:json ({), code:block159 (Edit applied successfully.)
 
 ### Community 272 - "Community 272"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block46 (diff --git a/working-molab-v6-unsloth.py b/working-molab-v6-)
+Nodes (3): Assistant, code:json ({), code:block62 (61bb1fa add vision diagnostic reports, verification scripts,)
 
 ### Community 273 - "Community 273"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block165 (OK)
+Nodes (3): Assistant, code:json ({), code:block44 (working-molab-v6-unsloth.py        |  69 +++++++++----------)
 
 ### Community 274 - "Community 274"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block52 (A  working-molab-v6-combined-unsloth.py)
+Nodes (3): Assistant, code:json ({), code:block210 (Edit applied successfully.)
 
 ### Community 275 - "Community 275"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block140 (Wrote file successfully.)
+Nodes (3): Assistant, code:json ({), code:block111 (OK)
 
 ### Community 276 - "Community 276"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block161 (OK)
+Nodes (3): Assistant, code:json ({), code:block173 (total lines: 3816 | cells: 34)
 
 ### Community 277 - "Community 277"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block171 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block96 (Wrote file successfully.)
 
 ### Community 278 - "Community 278"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block169 (OK)
+Nodes (3): Assistant, code:json ({), code:block33 (Edit applied successfully.)
 
 ### Community 279 - "Community 279"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block198 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block165 (OK)
 
 ### Community 280 - "Community 280"
 Cohesion: 0.67
-Nodes (3): Assistant, code:block183 (p.ndim == 2  →  cabang Muon (Newton-Schulz orthogonalization), code:python (PROJECTOR_BRANCH = "muon"    # default sekarang (ikut aturan)
+Nodes (3): Assistant, code:json ({), code:block76 (<path>D:\Codings\unsloth-porto\t5-gemma-2\instruct\docs\Reve)
 
 ### Community 281 - "Community 281"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block208 (critical[unparsable-cells]: Notebook contains unparsable cod)
+Nodes (3): Assistant, code:json ({), code:block74 (To https://github.com/daruoktab/t5gemma2-instruct.git)
 
 ### Community 282 - "Community 282"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block94 (deleted)
+Nodes (3): Assistant, code:json ({), code:block13 ((no output))
 
 ### Community 283 - "Community 283"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block235 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block2 ((no output))
 
 ### Community 284 - "Community 284"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block96 (Wrote file successfully.)
+Nodes (3): Assistant, code:json ({), code:block121 (critical[invalid-syntax]: 'return' outside function)
 
 ### Community 285 - "Community 285"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block60 (User has answered your questions: "Push ditolak GitHub karen)
+Nodes (3): Assistant, code:json ({), code:block37 (FINAL CHECK OK)
 
 ### Community 286 - "Community 286"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block173 (total lines: 3816 | cells: 34)
+Nodes (3): Assistant, code:json ({), code:block163 (Edit applied successfully.)
 
 ### Community 287 - "Community 287"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block68 (Unstaged changes after reset:)
+Nodes (3): Assistant, code:json ({), code:block117 (Edit applied successfully.)
 
 ### Community 288 - "Community 288"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block44 (working-molab-v6-unsloth.py        |  69 +++++++++----------)
+Nodes (3): Assistant, code:json ({), code:block169 (OK)
 
 ### Community 289 - "Community 289"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block177 (warning[markdown-indentation]: Markdown cell should be deden)
+Nodes (3): Assistant, code:json ({), code:block66 (Edit applied successfully.)
 
 ### Community 290 - "Community 290"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block233 (Traceback (most recent call last):)
+Nodes (3): Assistant, code:json ({), code:block175 (Edit applied successfully.)
 
 ### Community 291 - "Community 291"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block117 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block105 (OK)
 
 ### Community 292 - "Community 292"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block218 (Traceback (most recent call last):)
+Nodes (3): Assistant, code:json ({), code:block27 (Found 47 matches)
 
 ### Community 293 - "Community 293"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block119 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block56 (remote: error: Trace: 4fcafeaa72e099fc1d649358b8078cac7fad77)
 
 ### Community 294 - "Community 294"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block56 (remote: error: Trace: 4fcafeaa72e099fc1d649358b8078cac7fad77)
+Nodes (3): Assistant, code:json ({), code:block177 (warning[markdown-indentation]: Markdown cell should be deden)
 
 ### Community 295 - "Community 295"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block13 ((no output))
+Nodes (3): Assistant, code:json ({), code:block212 (MUON_LR_SCALE: 4 | PROJECTOR_BRANCH: 4 | force_branch: 7)
 
 ### Community 296 - "Community 296"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block50 (main)
+Nodes (3): Assistant, code:json ({), code:block237 (NS5: shape=(64, 32) dtype=torch.bfloat16 singular~[min=0.964)
 
 ### Community 297 - "Community 297"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block98 (OK)
+Nodes (3): Assistant, code:json ({), code:block140 (Wrote file successfully.)
 
 ### Community 298 - "Community 298"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block92 (Wrote file successfully.)
+Nodes (3): Assistant, code:json ({), code:block161 (OK)
 
 ### Community 299 - "Community 299"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block54 ([main d243686] feat: combined text+vision+cangkok pipeline i)
+Nodes (3): Assistant, code:json ({), code:block48 ({)
 
 ### Community 300 - "Community 300"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block220 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block222 (Traceback (most recent call last):)
 
 ### Community 301 - "Community 301"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block70 (warning: in the working copy of 'scripts/tests/results/t5gem)
+Nodes (3): Assistant, code:json ({), code:block214 ([31;1mdipaksa: [0m)
 
 ### Community 302 - "Community 302"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block194 (Edit applied successfully.)
+Nodes (3): Assistant, code:json ({), code:block58 (git-lfs/3.7.1 (GitHub; windows amd64; go 1.25.1; git b84b338)
 
 ### Community 303 - "Community 303"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block222 (Traceback (most recent call last):)
+Nodes (3): Assistant, code:json ({), code:block94 (deleted)
 
 ### Community 304 - "Community 304"
 Cohesion: 0.67
-Nodes (3): Assistant, code:json ({), code:block216 (Wrote file successfully.)
+Nodes (3): code:block1 (Phase 1 (sekarang): SFT dengan dataset daruokta/t5-gemma-2-c), code:python (# Strategi: generate N kandidat per prompt, rank by rule-bas), Rekomendasi Konkret untuk T5Gemma2-Instruct
 
 ### Community 305 - "Community 305"
 Cohesion: 0.67
@@ -1477,11 +1477,11 @@ Nodes (3): Apa yang Sebenarnya Dikatakan Paper, DPO (Rafailov et al., 2023), Sim
 
 ### Community 307 - "Community 307"
 Cohesion: 0.67
-Nodes (3): code:block1 (Phase 1 (sekarang): SFT dengan dataset daruokta/t5-gemma-2-c), code:python (# Strategi: generate N kandidat per prompt, rank by rule-bas), Rekomendasi Konkret untuk T5Gemma2-Instruct
+Nodes (3): 1. Selective LoRA Targeting (Efisiensi Fine-Tuning v7), 2. Menganalisis Keseimbangan `hook_cross_pattern` vs `hook_pattern`, Bagaimana TransformerLens Membantu Planning & Training v7 Ke Depan?
 
 ### Community 308 - "Community 308"
 Cohesion: 0.67
-Nodes (3): 1. Selective LoRA Targeting (Efisiensi Fine-Tuning v7), 2. Menganalisis Keseimbangan `hook_cross_pattern` vs `hook_pattern`, Bagaimana TransformerLens Membantu Planning & Training v7 Ke Depan?
+Nodes (3): code:python (delta_dict = {}), code:python (lambda_scale = 0.7  # hyperparameter scaling), Strategi Praktis Eksekusi (Recipe)
 
 ### Community 309 - "Community 309"
 Cohesion: 0.67
@@ -1489,16 +1489,12 @@ Nodes (3): 1. Mengapa "Cangkok" Weight Gemma-IT ke T5Gemma Decoder Gagal?, Formu
 
 ### Community 310 - "Community 310"
 Cohesion: 0.67
-Nodes (3): code:python (delta_dict = {}), code:python (lambda_scale = 0.7  # hyperparameter scaling), Strategi Praktis Eksekusi (Recipe)
-
-### Community 311 - "Community 311"
-Cohesion: 0.67
 Nodes (3): 1. Formula Matematika Task Vector:, 2. Suntikkan ke T5Gemma Base:, Bagaimana Cara Meng-otak-atik Weight Delta ($\Delta_{\text{instruct}}$)?
 
 ## Knowledge Gaps
-- **1559 isolated node(s):** `Audit & fix task-prefix issues di data multimodal T5Gemma2 instruct project.  Ma`, `Hapus <unusedX> berturut-turut di awal string (+ spasi setelahnya).`, `Inference Script untuk Fine-tuned T5Gemma-2-270m-270m ==========================`, `Menerapkan logit masking secara dinamis lewat PyTorch forward hook.`, `Load model - either LoRA adapter or merged model.` (+1554 more)
+- **1560 isolated node(s):** `Audit & fix task-prefix issues di data multimodal T5Gemma2 instruct project.  Ma`, `Hapus <unusedX> berturut-turut di awal string (+ spasi setelahnya).`, `Inference Script untuk Fine-tuned T5Gemma-2-270m-270m ==========================`, `Menerapkan logit masking secara dinamis lewat PyTorch forward hook.`, `Load model - either LoRA adapter or merged model.` (+1555 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **63 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **64 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
@@ -1507,13 +1503,13 @@ _Questions this graph is uniquely positioned to answer:_
   _High betweenness centrality (0.007) - this node is a cross-community bridge._
 - **Why does `_UnslothRLOOTrainer` connect `Community 4` to `Community 14`?**
   _High betweenness centrality (0.006) - this node is a cross-community bridge._
-- **Why does `Greeting` connect `Community 27` to `Community 40`, `Community 84`, `Community 93`, `Community 119`, `Community 129`, `Community 130`, `Community 154`, `Community 155`, `Community 156`, `Community 157`, `Community 158`, `Community 159`, `Community 160`, `Community 161`, `Community 162`, `Community 197`, `Community 198`, `Community 199`, `Community 200`, `Community 235`, `Community 236`, `Community 237`, `Community 238`, `Community 239`, `Community 240`, `Community 241`, `Community 242`, `Community 243`, `Community 244`, `Community 245`, `Community 246`, `Community 247`, `Community 248`, `Community 249`, `Community 250`, `Community 251`, `Community 252`, `Community 253`, `Community 254`, `Community 255`, `Community 256`, `Community 257`, `Community 258`, `Community 259`, `Community 260`, `Community 261`, `Community 262`, `Community 263`, `Community 264`, `Community 265`, `Community 266`, `Community 267`, `Community 268`, `Community 269`, `Community 270`, `Community 271`, `Community 272`, `Community 273`, `Community 274`, `Community 275`, `Community 276`, `Community 277`, `Community 278`, `Community 279`, `Community 280`, `Community 281`, `Community 282`, `Community 283`, `Community 284`, `Community 285`, `Community 286`, `Community 287`, `Community 288`, `Community 289`, `Community 290`, `Community 291`, `Community 292`, `Community 293`, `Community 294`, `Community 295`, `Community 296`, `Community 297`, `Community 298`, `Community 299`, `Community 300`, `Community 301`, `Community 302`, `Community 303`, `Community 304`?**
+- **Why does `Greeting` connect `Community 26` to `Community 40`, `Community 84`, `Community 93`, `Community 120`, `Community 130`, `Community 131`, `Community 155`, `Community 156`, `Community 157`, `Community 158`, `Community 159`, `Community 160`, `Community 161`, `Community 162`, `Community 163`, `Community 198`, `Community 199`, `Community 200`, `Community 201`, `Community 235`, `Community 236`, `Community 237`, `Community 238`, `Community 239`, `Community 240`, `Community 241`, `Community 242`, `Community 243`, `Community 244`, `Community 245`, `Community 246`, `Community 247`, `Community 248`, `Community 249`, `Community 250`, `Community 251`, `Community 252`, `Community 253`, `Community 254`, `Community 255`, `Community 256`, `Community 257`, `Community 258`, `Community 259`, `Community 260`, `Community 261`, `Community 262`, `Community 263`, `Community 264`, `Community 265`, `Community 266`, `Community 267`, `Community 268`, `Community 269`, `Community 270`, `Community 271`, `Community 272`, `Community 273`, `Community 274`, `Community 275`, `Community 276`, `Community 277`, `Community 278`, `Community 279`, `Community 280`, `Community 281`, `Community 282`, `Community 283`, `Community 284`, `Community 285`, `Community 286`, `Community 287`, `Community 288`, `Community 289`, `Community 290`, `Community 291`, `Community 292`, `Community 293`, `Community 294`, `Community 295`, `Community 296`, `Community 297`, `Community 298`, `Community 299`, `Community 300`, `Community 301`, `Community 302`, `Community 303`?**
   _High betweenness centrality (0.006) - this node is a cross-community bridge._
 - **What connects `Audit & fix task-prefix issues di data multimodal T5Gemma2 instruct project.  Ma`, `Hapus <unusedX> berturut-turut di awal string (+ spasi setelahnya).`, `Inference Script untuk Fine-tuned T5Gemma-2-270m-270m ==========================` to the rest of the system?**
-  _1559 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _1560 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.06 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.05 - nodes in this community are weakly interconnected._
 - **Should `Community 2` be split into smaller, more focused modules?**
-  _Cohesion score 0.05 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
