@@ -80,7 +80,7 @@ def _():
     DATASET_VISION_REPO = "daruokta/t5gemma2-indonesia-vision-formatted"
 
     BASE_T5_MODEL = "google/t5gemma-2-4b-4b"
-    GEMMA_BASE_MODEL = "google/gemma-3-4b"
+    GEMMA_BASE_MODEL = "google/gemma-3-4b-pt"
     GEMMA_IT_MODEL = "google/gemma-3-4b-it"
 
     # Subfolder layout di dalam UNIFIED_HF_REPO
@@ -352,14 +352,14 @@ def _(hf_token_widget, mo, os):
             login(token=_val)
             auth_status = mo.md(
                 "✅ **Hugging Face Token terautentikasi!** Berhasil login ke HuggingFace Hub. "
-                "Siap mengakses gated models (`google/gemma-3-4b`, `google/t5gemma-2-4b-4b`)."
+                "Siap mengakses gated models (`google/gemma-3-4b-pt`, `google/gemma-3-4b-it`, `google/t5gemma-2-4b-4b`)."
             )
         except Exception as _e_login:
             auth_status = mo.md(f"❌ **Gagal login ke Hugging Face:** {_e_login}")
     else:
         auth_status = mo.md(
             "⚠️ **`HF_TOKEN` belum dimasukkan.** Masukkan HF Access Token Anda pada input widget di atas "
-            "untuk mengautentikasi dan mengunduh gated models (`google/gemma-3-4b`, `google/t5gemma-2-4b-4b`).\n\n"
+            "untuk mengautentikasi dan mengunduh gated models (`google/gemma-3-4b-pt`, `google/gemma-3-4b-it`, `google/t5gemma-2-4b-4b`).\n\n"
             "👉 Ambil token di: [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)"
         )
 
@@ -1312,9 +1312,9 @@ def _(
         _load_ok = False
         if not _token:
             print("❌ [STEER] Error: HF_TOKEN belum diset di Cell 'Hugging Face Token'.")
-            print("ℹ️ Model 'google/gemma-3-4b' & 'google/gemma-3-4b-it' adalah GATED MODELS di Hugging Face.")
+            print("ℹ️ Model 'google/gemma-3-4b-pt' & 'google/gemma-3-4b-it' adalah GATED MODELS di Hugging Face.")
             print("👉 Pastikan Anda telah menyetujui lisensi pada link HF berikut:")
-            print("   1. https://huggingface.co/google/gemma-3-4b")
+            print("   1. https://huggingface.co/google/gemma-3-4b-pt")
             print("   2. https://huggingface.co/google/gemma-3-4b-it")
             print("   3. https://huggingface.co/google/t5gemma-2-4b-4b")
             print("👉 Masukkan HF Token Anda di input widget pada Cell 'Hugging Face Token' lalu jalankan ulang cell ini.")
@@ -1337,9 +1337,9 @@ def _(
                 _load_ok = True
             except Exception as _e_load:
                 print(f"\n❌ [STEER] Gagal memuat model gated HF: {_e_load}")
-                print("ℹ️ Model 'google/gemma-3-4b' & 'google/gemma-3-4b-it' memerlukan akses lisensi HuggingFace!")
+                print("ℹ️ Model 'google/gemma-3-4b-pt' & 'google/gemma-3-4b-it' memerlukan akses lisensi HuggingFace!")
                 print("👉 Buka link berikut di browser dan klik 'Access repository / Accept license':")
-                print("   • https://huggingface.co/google/gemma-3-4b")
+                print("   • https://huggingface.co/google/gemma-3-4b-pt")
                 print("   • https://huggingface.co/google/gemma-3-4b-it")
                 print("   • https://huggingface.co/google/t5gemma-2-4b-4b")
                 print("👉 Kemudian pastikan HF_TOKEN di widget diisi token HuggingFace yang valid.")
