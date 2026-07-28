@@ -1452,7 +1452,7 @@ def _(
                                 input_ids=_ids, max_new_tokens=48, do_sample=False,
                                 pad_token_id=_smoke_tok.pad_token_id,
                             )
-                            _resp = _smoke_tok.decode(_out[0][_ids.shape[-1]:], skip_special_tokens=True)
+                            _resp = _smoke_tok.decode(_out[0], skip_special_tokens=True)
                             print(f"\n  Q: {_p}\n  A: {_resp}")
                     _t5.to("cpu")
                     gc.collect()
