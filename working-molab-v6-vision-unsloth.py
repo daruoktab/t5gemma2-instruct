@@ -27,7 +27,7 @@
 
 import marimo
 
-__generated_with = "0.23.14"
+__generated_with = "0.23.9"
 app = marimo.App(
     width="full",
     css_file="/usr/local/_marimo/custom.css",
@@ -103,7 +103,7 @@ def _():
 def _(mo):
     mo.md(r"""
     # 📷 Multimodal Vision SFT Fine-Tuning Pipeline (Version 6 - Unsloth)
-    =====================================================================
+
     Notebook ini melatih aspek **vision** dari model **T5Gemma-2 4B-4B** menggunakan QLoRA/LoRA via Unsloth.
     Model dasar yang digunakan adalah model hasil SFT + ORPO teks (`t5gemma-2-4b-4b-instruct-chat-indo-v4-unsloth`).
 
@@ -316,7 +316,7 @@ def _(Image, os):
         img_paths = rec.get("images", [])
         if not img_paths:
             return None
-        
+
         pil_images = []
         if isinstance(img_paths[0], str):
             for p in img_paths:
@@ -493,12 +493,7 @@ def _(Image, os):
         formatted += "<start_of_turn>model\n"
         return formatted
 
-    return (
-        convert_sft_record_to_vision,
-        format_encoder_from_raw,
-        parse_orpo_prompt_to_messages,
-        unroll_vision_messages_to_sft_samples,
-    )
+    return (format_encoder_from_raw,)
 
 
 @app.cell
@@ -1455,7 +1450,12 @@ def _(
                 print(f"⚠️ Upload gagal untuk {checkpoint_name}: {e}")
             return control
 
-    return CleanNotebookProgressCallback, HubUploadCallback, SampleGenerationCallback, TrainingPlotCallback
+    return (
+        CleanNotebookProgressCallback,
+        HubUploadCallback,
+        SampleGenerationCallback,
+        TrainingPlotCallback,
+    )
 
 
 @app.cell
@@ -1725,8 +1725,10 @@ def _(
     cast,
     current_stage,
     exact_match_metric,
+    format_encoder_from_raw,
     gc,
     get_scheduler,
+    load_dataset,
     meteor_metric,
     mo,
     model,
@@ -1738,10 +1740,6 @@ def _(
     torch,
     traceback,
     train_dataset,
-    unroll_vision_messages_to_sft_samples,
-    convert_sft_record_to_vision,
-    format_encoder_from_raw,
-    load_dataset,
 ):
     mo.stop(
         current_stage != "sft",
@@ -1799,7 +1797,7 @@ def _(
                 continue
 
             prompt_text = processor.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
-            
+
             # Count image blocks in context up to this turn
             _num_context_images = 0
             for _m in context:
@@ -2266,6 +2264,7 @@ def _(
     cast,
     current_stage,
     exact_match_metric,
+    format_encoder_from_raw,
     gc,
     get_scheduler,
     load_dataset,
@@ -2274,13 +2273,11 @@ def _(
     model,
     np,
     os,
-    parse_orpo_prompt_to_messages,
     processor,
     resume_checkpoint,
     rouge_metric,
     torch,
     traceback,
-    format_encoder_from_raw,
 ):
     # Re-detect pipeline stage FRESH dari HF Hub. Cell deteksi stage awal hanya
     # jalan sekali di awal notebook dan nilainya di-cache marimo. Saat notebook
@@ -2343,7 +2340,7 @@ def _(
     prompts_list = raw_orpo_dataset["prompt"]
     chosen_list = raw_orpo_dataset["chosen"]
     rejected_list = raw_orpo_dataset["rejected"]
-    
+
     for _idx_orpo in range(len(prompts_list)):
         prompt_str = prompts_list[_idx_orpo]
         chosen_raw = chosen_list[_idx_orpo].replace("assistant: ", "", 1).strip()
@@ -2374,7 +2371,7 @@ def _(
                 current_lines.append(line)
         if current_role is not None:
             raw_messages.append((current_role, "\n".join(current_lines)))
-        
+
         # Merge messages and count 📷
         new_messages = []
         for _role_orpo, _content_orpo in raw_messages:

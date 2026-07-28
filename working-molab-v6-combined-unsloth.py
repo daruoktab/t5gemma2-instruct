@@ -27,16 +27,19 @@
 # ///
 #
 # =====================================================================
-# COMBINED PIPELINE (gabungan 2 notebook, TIDAK mengubah file asli):
-#   - working-molab-v6-unsloth.py        (Phase 1: TEXT SFT -> ORPO)
-#   - working-molab-v6-vision-unsloth.py (Phase 2: VISION SFT -> ORPO)
-#   - Phase 1.5: CANGKOK (diadaptasi dari scripts/tests/verify_vision_weights_3way.py
-#     cell CANGKOK + scripts/tests/patch_cangkok_tokenizer.py)
+# T5Gemma-2 JOINT MULTIMODAL PIPELINE (v7 — 1-Stage Joint Co-Training)
+# =====================================================================
+#   Phase 0.5 : 3-Way Task Vector Steering (decoder T5Gemma <- Δ(Gemma3-IT - Gemma3-Base))
+#   Phase 1.5 : Vision Grafting (SigLIP + multi_modal_projector <- Gemma 3 4B IT)
+#   Phase 1   : JOINT SFT  (teks chat/indoqa + vision dicampur dalam 1 loop)
+#   Phase 2   : JOINT ORPO (teks orpo + vision orpo dicampur dalam 1 loop, ε=0)
+#   Final     : 1x Merge (BF16 + 4bit) -> unified repo subfolder final/
 #
-# Aturan penamaan (marimo melarang nama variabel non-underscore didefinisikan 2x):
-#   TEXT_*   = konfigurasi Phase 1 (text)
-#   VISION_* = konfigurasi Phase 2 (vision)
-#   shared   = util/konstanta identik di kedua pipeline (didefinisikan SEKALI)
+# Semua artifacts dalam 1 repo HF PUBLIK (nama repo di CONTROL CENTER, cell ke-2):
+#   steered/  -> checkpoint hasil Phase 0.5
+#   cangkok/  -> checkpoint hasil Phase 1.5 (base model untuk training)
+#   joint/    -> sft/, orpo/ (checkpoints + final_adapter + logs)
+#   final/    -> merged_bf16/, quantized_4bit/  (HASIL AKHIR)
 # =====================================================================
 
 import marimo
@@ -54,6 +57,270 @@ def _():
     import marimo as mo
 
     return (mo,)
+
+
+# #####################################################################
+#   ██████╗ ██████╗ ███╗   ██╗████████╗██████╗  ██████╗ ██╗
+#  ██╔════╝██╔═══██╗████╗  ██║╚══██╔══╝██╔══██╗██╔═══██╗██║
+#  ██║     ██║   ██║██╔██╗ ██║   ██║   ██████╔╝██║   ██║██║
+#  ██║     ██║   ██║██║╚██╗██║   ██║   ██╔══██╗██║   ██║██║
+#  ╚██████╗╚██████╔╝██║ ╚████║   ██║   ██║  ██║╚██████╔╝███████╗
+#   ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
+#
+#   CONTROL CENTER — CELL 1: SEMUA VARIABEL TWEAKABLE ADA DI SINI
+#   (Yang BAKU/struktural — mis. suppress token IDs — tetap di cell shared.)
+# #####################################################################
+@app.cell
+def _():
+    # =====================================================================
+    # 1A. REPO & MODEL SOURCES
+    # =====================================================================
+    UNIFIED_HF_REPO = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v7-joint-unsloth"
+    DATASET_TEXT_REPO = "daruokta/t5gemma2-indonesia-chat-formatted"
+    DATASET_VISION_REPO = "daruokta/t5gemma2-indonesia-vision-formatted"
+
+    BASE_T5_MODEL = "google/t5gemma-2-4b-4b"
+    GEMMA_BASE_MODEL = "google/gemma-3-4b"
+    GEMMA_IT_MODEL = "google/gemma-3-4b-it"
+
+    # Subfolder layout di dalam UNIFIED_HF_REPO
+    STEERED_SUBFOLDER = "steered"
+    CANGKOK_SUBFOLDER = "cangkok"
+    JOINT_PREFIX = "joint"                     # joint/sft, joint/orpo
+    FINAL_PREFIX = "final"                     # final/merged_bf16, final/quantized_4bit
+
+    OUTPUT_DIR = "results/t5gemma2_joint"      # working dir lokal (checkpoints, logs, merge)
+
+    # =====================================================================
+    # 1B. PHASE FLAGS & GATES
+    # =====================================================================
+    ENABLE_STEERING = True        # Phase 0.5 — task vector steering decoder
+    STEERING_FORCE = False        # True = steer ulang walau steered/ sudah ada di repo
+    CANGKOK_FORCE = False         # True = graft ulang walau cangkok/ sudah ada di repo
+    RUN_SFT = True                # False = skip Phase 2.1 (langsung cek ORPO/merge)
+    RUN_ORPO = True               # False = stop setelah SFT
+
+    # =====================================================================
+    # 1C. STEERING HYPERPARAMS (Phase 0.5) — merged-attention-aware
+    # =====================================================================
+    STEERING_ALPHA_FFN = 0.8      # gate/up/down — aman penuh (token-wise, tak sentuh [X;H])
+    STEERING_ALPHA_QO = 0.3       # q_proj & o_proj — moderat
+    STEERING_ALPHA_KV = 0.0       # k_proj & v_proj — PALING BERBAHAYA (joint projection [X;H]); 0 = skip
+    STEERING_ALPHA_QKNORM = 0.0   # q_norm & k_norm — terikat kalibrasi joint softmax
+    STEERING_ALPHA_NORM = 0.3     # RMSNorm layer (pre/post attn, pre/post ff, final norm)
+    STEERING_SMOKE_TEST = True    # generate 3 prompt singkat untuk sanity check hasil steering
+
+    # =====================================================================
+    # 1D. DATA & MIXING (Joint Co-Training)
+    # =====================================================================
+    TEXT_CHAT_CONFIG = "chat_sft"
+    TEXT_INDOQA_CONFIG = "indoqa_sft"
+    TEXT_ORPO_CONFIG = "chat_orpo"
+    VISION_SFT_CONFIG = "vision_sft"
+    VISION_ORPO_CONFIG = "vision_orpo"
+
+    SAMPLE_TRAIN_CHAT = 0         # 0 = ambil seluruh data
+    SAMPLE_TRAIN_INDOQA = 0
+    SAMPLE_TRAIN_TEXT_ORPO = 0
+    SAMPLE_TRAIN_VISION_SFT = 0
+    SAMPLE_TRAIN_VISION_ORPO = 0
+
+    JOINT_TEXT_RATIO = 0.3        # target proporsi baris TEKS dalam joint SFT (70/30 vision:text)
+    JOINT_TEXT_RATIO_ORPO = 0.3   # target proporsi baris TEKS dalam joint ORPO
+    VISION_TEST_SIZE = 0.05       # split eval multimodal
+    MAX_EVAL_SAMPLES = 30         # cap eval set (cegah OOM predict_with_generate)
+    MAX_EVAL_GEN_SAMPLES = 20     # cap sample kualitatif per eval-kind
+
+    # =====================================================================
+    # 1E. SFT HYPERPARAMS (Phase 1 - Joint)
+    # =====================================================================
+    LOAD_IN_4BIT = True
+    MAX_SOURCE_LENGTH = 16384
+    MAX_TARGET_LENGTH = 2048
+
+    LORA_RANK = 256
+    LORA_ALPHA = 512
+    LORA_DROPOUT = 0.2
+    LORA_USE_RSLORA = True
+
+    SFT_LEARNING_RATE = 5e-6
+    SFT_NUM_EPOCHS = 2
+    SFT_PER_DEVICE_TRAIN_BATCH_SIZE = 2
+    SFT_GRADIENT_ACCUMULATION_STEPS = 32
+    SFT_WARMUP_STEPS = 100
+    SFT_WEIGHT_DECAY = 0.1
+    SFT_LR_SCHEDULER_TYPE = "cosine"
+    SFT_LOGGING_STEPS = 10
+    SFT_SAVE_EVAL_STEPS = 50
+    SFT_SAVE_TOTAL_LIMIT = 2
+    SFT_LABEL_SMOOTHING_FACTOR = 0.1
+    SFT_NEFTUNE_NOISE_ALPHA = 5.0
+    SFT_MAX_GRAD_NORM = 5.0
+    SFT_PREDICT_WITH_GENERATE = True
+
+    # Split-LR multiplier per param group (relatif terhadap SFT_LEARNING_RATE)
+    SFT_LR_MULT_ENCODER = 0.2
+    SFT_LR_MULT_DECODER = 0.2
+    SFT_LR_MULT_PROJECTOR = 0.05
+    SFT_LR_MULT_VISION_TOWER = 0.0   # vision tower frozen (finetune_vision_layers=False)
+
+    # =====================================================================
+    # 1F. ORPO HYPERPARAMS (Phase 2 - Joint)
+    # =====================================================================
+    ORPO_BETA = 0.1
+    ORPO_LEARNING_RATE = 5e-6
+    ORPO_NUM_EPOCHS = 1
+    ORPO_PER_DEVICE_TRAIN_BATCH_SIZE = 2
+    ORPO_GRADIENT_ACCUMULATION_STEPS = 32
+    ORPO_WARMUP_STEPS = 100
+    ORPO_WEIGHT_DECAY = 0.1
+    ORPO_LR_SCHEDULER_TYPE = "cosine"
+    ORPO_LOGGING_STEPS = 10
+    ORPO_SAVE_EVAL_STEPS = 50
+    ORPO_SAVE_TOTAL_LIMIT = 2
+    ORPO_LABEL_SMOOTHING_FACTOR = 0.0   # WAJIB 0.0 — smoothing merusak odds-ratio ORPO
+    ORPO_PREDICT_WITH_GENERATE = True
+
+    ORPO_LR_MULT_ENCODER = 0.5
+    ORPO_LR_MULT_DECODER = 1.0
+    ORPO_LR_MULT_PROJECTOR = 1.0
+    ORPO_LR_MULT_VISION_TOWER = 0.5
+
+    # =====================================================================
+    # 1G. OPTIMIZER
+    # =====================================================================
+    # "grokmuonadema" = GrokFast filter + Muon (param 2D, Newton-Schulz) + AdEMAMix (param 1D)
+    # "grokademamix"  = GrokFast + AdEMAMix murni (optimizer v6 yang sudah terbukti)
+    # "paged_adamw_8bit" = bawaan HF/Unsloth (fallback paling hemat VRAM)
+    OPTIMIZER_TYPE = "grokmuonadema"
+    # GrokFast
+    GROK_ALPHA = 2.0
+    GROK_LAMB = 0.98
+    # AdEMAMix
+    ADEMA_BETA1 = 0.9
+    ADEMA_BETA2 = 0.999
+    ADEMA_BETA3 = 0.9999
+    # Muon
+    MUON_MOMENTUM = 0.95
+    MUON_NS_STEPS = 5
+    MUON_NESTEROV = True
+    MUON_MAX_GRAD_NORM = 1.0          # MuonClip threshold
+    # Update Muon di-ortonormalisasi (magnitudo ≈ lr × ~1, tidak diskalakan
+    # statistik gradien seperti Adam) -> butuh LR lebih besar dari Adam-family.
+    # Skala ini mengalikan LR khusus param cabang Muon (LoRA A/B 2D dll).
+    # ORPO pakai skala lebih kecil — preference update harus lembut & stabil.
+    SFT_MUON_LR_SCALE = 20.0          # mis. decoder SFT: 5e-6 × 0.2 × 20 ≈ 2e-5
+    ORPO_MUON_LR_SCALE = 5.0          # mis. decoder ORPO: 5e-6 × 1.0 × 5 ≈ 2.5e-5
+    # Routing komponen multi_modal_projector (2D bobotnya):
+    #   "muon"  = ikut aturan 2D -> cabang Muon
+    #   "adema" = paksa ke cabang AdEMAMix (konservatif untuk bobot pretrained graft)
+    PROJECTOR_BRANCH = "muon"
+
+    # =====================================================================
+    # 1H. GENERATION EVAL & MISC
+    # =====================================================================
+    GEN_TEMPERATURE = 0.7
+    GEN_TOP_P = 0.9
+    GEN_REPETITION_PENALTY = 1.2
+    SEED = 3407
+    return (
+        ADEMA_BETA1,
+        ADEMA_BETA2,
+        ADEMA_BETA3,
+        BASE_T5_MODEL,
+        CANGKOK_FORCE,
+        CANGKOK_SUBFOLDER,
+        DATASET_TEXT_REPO,
+        DATASET_VISION_REPO,
+        ENABLE_STEERING,
+        FINAL_PREFIX,
+        GEMMA_BASE_MODEL,
+        GEMMA_IT_MODEL,
+        GEN_REPETITION_PENALTY,
+        GEN_TEMPERATURE,
+        GEN_TOP_P,
+        GROK_ALPHA,
+        GROK_LAMB,
+        JOINT_PREFIX,
+        JOINT_TEXT_RATIO,
+        JOINT_TEXT_RATIO_ORPO,
+        LOAD_IN_4BIT,
+        LORA_ALPHA,
+        LORA_DROPOUT,
+        LORA_RANK,
+        LORA_USE_RSLORA,
+        MAX_EVAL_GEN_SAMPLES,
+        MAX_EVAL_SAMPLES,
+        MAX_SOURCE_LENGTH,
+        MAX_TARGET_LENGTH,
+        MUON_MAX_GRAD_NORM,
+        MUON_MOMENTUM,
+        MUON_NESTEROV,
+        MUON_NS_STEPS,
+        OPTIMIZER_TYPE,
+        ORPO_MUON_LR_SCALE,
+        ORPO_BETA,
+        ORPO_GRADIENT_ACCUMULATION_STEPS,
+        ORPO_LABEL_SMOOTHING_FACTOR,
+        ORPO_LEARNING_RATE,
+        ORPO_LOGGING_STEPS,
+        ORPO_LR_MULT_DECODER,
+        ORPO_LR_MULT_ENCODER,
+        ORPO_LR_MULT_PROJECTOR,
+        ORPO_LR_MULT_VISION_TOWER,
+        ORPO_LR_SCHEDULER_TYPE,
+        ORPO_NUM_EPOCHS,
+        ORPO_PER_DEVICE_TRAIN_BATCH_SIZE,
+        ORPO_PREDICT_WITH_GENERATE,
+        ORPO_SAVE_EVAL_STEPS,
+        ORPO_SAVE_TOTAL_LIMIT,
+        ORPO_WARMUP_STEPS,
+        ORPO_WEIGHT_DECAY,
+        OUTPUT_DIR,
+        PROJECTOR_BRANCH,
+        RUN_ORPO,
+        RUN_SFT,
+        SAMPLE_TRAIN_CHAT,
+        SAMPLE_TRAIN_INDOQA,
+        SAMPLE_TRAIN_TEXT_ORPO,
+        SAMPLE_TRAIN_VISION_ORPO,
+        SAMPLE_TRAIN_VISION_SFT,
+        SEED,
+        SFT_GRADIENT_ACCUMULATION_STEPS,
+        SFT_LABEL_SMOOTHING_FACTOR,
+        SFT_LEARNING_RATE,
+        SFT_LOGGING_STEPS,
+        SFT_LR_MULT_DECODER,
+        SFT_LR_MULT_ENCODER,
+        SFT_LR_MULT_PROJECTOR,
+        SFT_LR_MULT_VISION_TOWER,
+        SFT_LR_SCHEDULER_TYPE,
+        SFT_MAX_GRAD_NORM,
+        SFT_MUON_LR_SCALE,
+        SFT_NEFTUNE_NOISE_ALPHA,
+        SFT_NUM_EPOCHS,
+        SFT_PER_DEVICE_TRAIN_BATCH_SIZE,
+        SFT_PREDICT_WITH_GENERATE,
+        SFT_SAVE_EVAL_STEPS,
+        SFT_SAVE_TOTAL_LIMIT,
+        SFT_WARMUP_STEPS,
+        SFT_WEIGHT_DECAY,
+        STEERED_SUBFOLDER,
+        STEERING_ALPHA_FFN,
+        STEERING_ALPHA_KV,
+        STEERING_ALPHA_NORM,
+        STEERING_ALPHA_QKNORM,
+        STEERING_ALPHA_QO,
+        STEERING_FORCE,
+        STEERING_SMOKE_TEST,
+        TEXT_CHAT_CONFIG,
+        TEXT_INDOQA_CONFIG,
+        TEXT_ORPO_CONFIG,
+        UNIFIED_HF_REPO,
+        VISION_ORPO_CONFIG,
+        VISION_SFT_CONFIG,
+        VISION_TEST_SIZE,
+    )
 
 
 @app.cell
@@ -116,36 +383,24 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ✅ **STATUS: PIPELINE GABUNGAN READY TO RUN.**
+    ✅ **STATUS: JOINT PIPELINE READY.**
 
-    # 🔗 Combined Pipeline: TEXT (SFT+ORPO) → CANGKOK → VISION (SFT+ORPO)
+    # 🔗 T5Gemma-2 v7 — 1-Stage Joint Multimodal Co-Training
     =====================================================================
-    Satu file panjang yang menjalankan 3 fase berurutan:
-
-    1. **Phase 1 (TEXT)** — `google/t5gemma-2-4b-4b` dilatih SFT → ORPO (LoRA/QLoRA Unsloth),
-       merge (BF16 + 4bit), upload ke subfolder `text/`.
-    2. **Phase 1.5 (CANGKOK)** — Vision tower (SigLIP) + `multi_modal_projector` dari
-       `google/gemma-3-4b-it` dicangkokkan ke `text/merged_bf16` hasil Phase 1, di-upload ke
-       subfolder `cangkok/`.
-       *(Mekanisme diadaptasi dari `scripts/tests/verify_vision_weights_3way.py` cell CANGKOK
-       + `scripts/tests/patch_cangkok_tokenizer.py`.)*
-    3. **Phase 2 (VISION)** — base = subfolder `cangkok/`, dilatih Vision SFT → ORPO,
-       merge, upload ke subfolder `vision/`.
-
-    **Semua artifacts berada dalam 1 repo PUBLIK:**
-    `daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v6-combined-unsloth`
-    ```
-    text/     → sft/, orpo/, merged_bf16/, quantized_4bit/
-    cangkok/  → full model hasil graft (base untuk Phase 2)
-    vision/   → sft/, orpo/, merged_bf16/, quantized_4bit/  ← hasil akhir multimodal
+    ```mermaid
+    graph TD
+        A["google/t5gemma-2-4b-4b"] --> B["Phase 0.5: Task Vector Steering<br/>Δ = Gemma3-IT − Gemma3-Base (α per modul)"]
+        B --> C["Phase 1.5: Vision Grafting<br/>SigLIP + Projector ← Gemma 3 4B IT"]
+        C --> D["Phase 1: JOINT SFT<br/>vision + teks (chat & indoqa) dalam 1 loop"]
+        D --> E["Phase 2: JOINT ORPO<br/>vision_orpo + chat_orpo dalam 1 loop (ε=0)"]
+        E --> F["1x Merge → final/merged_bf16 & final/quantized_4bit"]
     ```
 
-    **Fitur utama (diwarisi dari kedua notebook asli):**
-    - Auto-detect progress dari HF Hub per fase — lanjut dari checkpoint terakhir.
-    - Upload checkpoint ke HF segera setelah disimpan (tahan kernel crash).
-    - Logit masking untuk menekan unused & vision tokens (<unused1>..<unused6> dikecualikan).
-    - `torch.compile` di-no-op-kan SEBELUM unsloth di-import (fix hard-crash fullgraph).
-    - GrokAdEMAMix optimizer (split-LR di fase vision), SelectiveLabelSmoother bersama.
+    **Mengapa 1-stage joint** (vs 2-stage v6): mencegah *catastrophic text forgetting*
+    (kemampuan Bahasa Indonesia hancur saat vision-only SFT), kalibrasi *Merged Attention*
+    teks↔gambar dipelajari bersamaan, dan total compute **±2x lebih hemat** (1x SFT + 1x ORPO saja).
+
+    **Semua konfigurasi tweakable ada di cell CONTROL CENTER (cell ke-2 dari atas).**
     """)
     return
 
@@ -157,38 +412,30 @@ def _():
     # Matikan auto torch.compile bawaan Unsloth (unsloth_zoo membungkus forward
     # T5Gemma2 dengan @torch.compile(fullgraph=True, dynamic=True, ...)). Dengan
     # fullgraph=True, begitu recompile limit kena, itu SELALU hard-crash tanpa
-    # ada config yang bisa menyelamatkan (fail_on_recompile_limit_hit /
-    # suppress_errors tidak berlaku untuk fullgraph). OOM sudah ditangani oleh
-    # expandable_segments di atas + gradient checkpointing "unsloth", jadi
-    # compile ini murni untuk speed, bukan untuk mencegah OOM -> aman dimatikan.
+    # ada config yang bisa menyelamatkan. OOM sudah ditangani oleh
+    # expandable_segments + gradient checkpointing "unsloth".
     os.environ["TORCH_COMPILE_DISABLE"] = "1"
     import re, json, torch, random, datetime, gc, traceback
     import warnings
     warnings.filterwarnings("ignore")
 
-    # Belt-and-suspenders di atas TORCH_COMPILE_DISABLE: env var itu ternyata
-    # TIDAK reliable mematikan compile Unsloth untuk T5Gemma2 di torch 2.12.1 --
-    # traceback masih lewat unsloth_compiled_module_t5gemma2.py & torch._dynamo
-    # meski env var sudah diset. Monkeypatch torch.compile jadi no-op di sini --
-    # SEBELUM unsloth di-import dan SEBELUM FastLanguageModel/FastVisionModel
-    # .from_pretrained() memicu Unsloth membungkus forward T5Gemma2 dengan
-    # @torch.compile(fullgraph=True, ...).
+    # Belt-and-suspenders di atas TORCH_COMPILE_DISABLE: monkeypatch torch.compile
+    # jadi no-op SEBELUM unsloth di-import dan SEBELUM FastVisionModel.from_pretrained()
+    # memicu Unsloth membungkus forward T5Gemma2 dengan @torch.compile(fullgraph=True, ...).
     def _torch_compile_noop(model=None, *args, **kwargs):
         if model is not None:
             return model
         return lambda fn: fn
     setattr(torch, "compile", _torch_compile_noop)
     import torch.nn.functional as F
-    # Naikkan recompile_limit jauh di atas jumlah modul (belt-and-suspenders).
     setattr(torch._dynamo.config, "recompile_limit", 1024)
     setattr(torch._dynamo.config, "cache_size_limit", 1024)
     from PIL import Image
-    from unsloth import FastLanguageModel, FastVisionModel
+    from unsloth import FastVisionModel
     from datasets import Dataset, load_dataset
     from transformers import (
         AutoProcessor, AutoTokenizer,
         Seq2SeqTrainer, Seq2SeqTrainingArguments,
-        DataCollatorForSeq2Seq, PreTrainedTokenizerFast,
         get_scheduler,
         TrainerCallback, TrainerControl, TrainerState, TrainingArguments,
     )
@@ -216,7 +463,7 @@ def _():
         bertscore_metric = None
         meteor_metric = None
 
-    # ---- LOGIT MASKING (decoder lm_head, shared text & vision) ----
+    # ---- LOGIT MASKING (decoder lm_head) ----
     def apply_logit_mask(model, suppress_ids):
         vs = model.config.vocab_size
         sl = [i for i in suppress_ids if i < vs]
@@ -249,13 +496,10 @@ def _():
         Any,
         AutoProcessor,
         AutoTokenizer,
-        DataCollatorForSeq2Seq,
         Dataset,
         F,
-        FastLanguageModel,
         FastVisionModel,
         Image,
-        PreTrainedTokenizerFast,
         Seq2SeqTrainer,
         Seq2SeqTrainingArguments,
         TrainerCallback,
@@ -284,40 +528,29 @@ def _():
 
 
 # =====================================================================
-# SHARED CONSTANTS (identik di pipeline text & vision)
+# SHARED CONSTANTS (BAKU — struktural, tidak perlu di-tweak)
 # =====================================================================
 @app.cell
 def _(torch):
-    # SYSTEM PROMPT FALLBACK (dipakai format_encoder_from_raw — string identik
-    # di kedua notebook; versi vision hardcode string yang sama)
+    # Token IDs yang harus di-suppress (unused + vision)
+    # Pengecualian: <unused1> sampai <unused6> (ID 7 hingga 12) digunakan untuk Task Prefix
+    SUPPRESS_BLOCK1 = [6] + list(range(13, 105))
+    SUPPRESS_BLOCK2 = list(range(256002, 262144))
+    SUPPRESS_VISION = [255999, 256000, 256001]   # boi, eoi, image_soft_token
+    ALL_SUPPRESS_IDS = set(SUPPRESS_BLOCK1 + SUPPRESS_BLOCK2 + SUPPRESS_VISION)
+
+    # SYSTEM PROMPT FALLBACK (identik dengan pipeline v6)
     SYSTEM_PROMPT = (
         "Kamu adalah asisten AI yang helpful, santai, dan ramah. "
         "Gunakan Bahasa Indonesia sebagai bahasa utama."
     )
 
-    # Token IDs yang harus di-suppress (unused + vision)
-    # Pengecualian: <unused1> sampai <unused6> (ID 7 hingga 12) digunakan untuk Task Prefix
-    SUPPRESS_BLOCK1 = [6] + list(range(13, 105))
-    SUPPRESS_BLOCK2 = list(range(256002, 262144))
-    SUPPRESS_VISION = [255999, 256000, 256001]
-    ALL_SUPPRESS_IDS = set(SUPPRESS_BLOCK1 + SUPPRESS_BLOCK2 + SUPPRESS_VISION)
-
-    # Shared seed & precision flag
-    SEED = 3407
     BF16 = torch.cuda.is_available()
-    return (
-        ALL_SUPPRESS_IDS,
-        BF16,
-        SEED,
-        SUPPRESS_BLOCK1,
-        SUPPRESS_BLOCK2,
-        SUPPRESS_VISION,
-        SYSTEM_PROMPT,
-    )
+    return ALL_SUPPRESS_IDS, BF16, SYSTEM_PROMPT
 
 
 # =====================================================================
-# SHARED UTILS: chat formatter (identik di kedua notebook)
+# SHARED UTILS
 # =====================================================================
 @app.cell
 def _(SYSTEM_PROMPT, re):
@@ -355,11 +588,82 @@ def _(SYSTEM_PROMPT, re):
 
 
 # =====================================================================
-# SHARED OPTIMIZER (versi vision — dengan dtype-cast fix untuk mixed
-# 4bit/BF16 params; no-op untuk LoRA murni di fase text)
+# SHARED LABEL SMOOTHER (chunked; hanya untuk SFT — ε=0 saat ORPO)
 # =====================================================================
 @app.cell
 def _(torch):
+    class SelectiveLabelSmoother:
+        def __init__(self, epsilon, suppress_ids):
+            self.epsilon = epsilon
+            self.suppress_ids = suppress_ids
+
+        def __call__(self, model_output, labels, shift_labels=False):
+            if isinstance(model_output, dict) and "logits" in model_output:
+                logits = model_output["logits"]
+            elif isinstance(model_output, tuple):
+                logits = (
+                    model_output[1] if len(model_output) > 1 else model_output[0].logits
+                )
+            else:
+                logits = model_output.logits
+
+            if shift_labels:
+                logits = logits[..., :-1, :].contiguous()
+                labels = labels[..., 1:].contiguous()
+
+            vocab_size = logits.size(-1)
+            suppress_list = [i for i in self.suppress_ids if i < vocab_size]
+
+            valid_mask = torch.ones(vocab_size, dtype=torch.bool, device=logits.device)
+            valid_mask[suppress_list] = False
+            num_valid_tokens = valid_mask.sum().item()
+
+            flat_logits = logits.view(-1, vocab_size)
+            flat_labels = labels.view(-1)
+
+            active_mask = flat_labels != -100
+            if active_mask.sum() == 0:
+                return torch.tensor(0.0, device=logits.device, requires_grad=True)
+
+            active_logits = flat_logits[active_mask]
+            active_labels = flat_labels[active_mask]
+
+            num_active = active_logits.size(0)
+            chunk_size = 2048
+
+            total_loss = torch.tensor(0.0, device=logits.device)
+
+            for i in range(0, num_active, chunk_size):
+                chunk_logits = active_logits[i : i + chunk_size]
+                chunk_labels = active_labels[i : i + chunk_size]
+
+                log_probs = torch.nn.functional.log_softmax(chunk_logits, dim=-1)
+
+                nll_loss = -log_probs.gather(
+                    dim=-1, index=chunk_labels.unsqueeze(-1)
+                ).squeeze(-1)
+
+                valid_log_probs = log_probs * valid_mask.to(log_probs.dtype)
+                smooth_loss = -valid_log_probs.sum(dim=-1) / num_valid_tokens
+
+                token_losses = (1.0 - self.epsilon) * nll_loss + self.epsilon * smooth_loss
+                total_loss += token_losses.sum()
+
+                del chunk_logits, chunk_labels, log_probs, nll_loss, valid_log_probs, smooth_loss, token_losses
+
+            return total_loss / num_active
+
+    return (SelectiveLabelSmoother,)
+
+
+# =====================================================================
+# OPTIMIZERS: GrokAdEMAMix (v6, proven) + Muon + GrokMuonAdEMA (hybrid)
+# =====================================================================
+@app.cell
+def _(torch):
+    import math as _math
+
+    # ---------- GrokAdEMAMix: optimizer v6 (GrokFast + AdEMAMix semua parameter) ----------
     class GrokAdEMAMix(torch.optim.Optimizer):
         def __init__(
             self,
@@ -449,77 +753,371 @@ def _(torch):
                     p.data.add_(step_update, alpha=-lr)
             return loss
 
-    return (GrokAdEMAMix,)
+    # ---------- Muon primitive: 5-step Quintic Newton-Schulz ----------
+    def zeropower_via_newtonschulz5(G: "torch.Tensor", steps: int = 5, eps: float = 1e-7) -> "torch.Tensor":
+        """
+        Ortogonalisasi matriks momentum G (2D) memakai quintic Newton-Schulz
+        iteration (Keller Jordan / Muon).
+        """
+        assert G.ndim == 2, f"Muon zeropower memerlukan tensor 2D, dapat {G.ndim}D"
+
+        a = 3.4445
+        b = -4.7750
+        c = 2.0315
+
+        X = G.to(torch.float32)
+        norm = X.norm() + eps
+        X = X / norm
+
+        if X.size(0) < X.size(1):
+            X = X.T
+
+        for _ in range(steps):
+            A = X @ X.T
+            B = b * A + c * (A @ A)
+            X = a * X + B @ X
+
+        if G.size(0) < G.size(1):
+            X = X.T
+
+        scale = max(1.0, _math.sqrt(G.size(0) / G.size(1)))
+        return (X * scale).to(G.dtype)
+
+    # ---------- GrokMuonAdEMA: GrokFast filter -> Muon (2D) / AdEMAMix (1D) ----------
+    class GrokMuonAdEMA(torch.optim.Optimizer):
+        """
+        - GrokFast: menyaring gradien (slow EMA amplified) sebelum optimizer step.
+        - Cabang 2D (linear/LoRA A/B dst): Muon update (momentum + Newton-Schulz).
+        - Cabang 1D (RMSNorm/bias/embed): AdEMAMix dual-EMA.
+        - MuonClip: clip norm gradien hasil filter di atas threshold.
+        """
+        def __init__(
+            self,
+            params,
+            lr=2e-4,
+            betas=(0.9, 0.999),
+            beta3=0.9999,
+            weight_decay=0.01,
+            grok_alpha=2.0,
+            grok_lamb=0.98,
+            momentum=0.95,
+            nesterov=True,
+            ns_steps=5,
+            max_grad_norm=1.0,
+        ):
+            defaults = dict(
+                lr=lr,
+                betas=betas,
+                beta3=beta3,
+                weight_decay=weight_decay,
+                grok_alpha=grok_alpha,
+                grok_lamb=grok_lamb,
+                momentum=momentum,
+                nesterov=nesterov,
+                ns_steps=ns_steps,
+                max_grad_norm=max_grad_norm,
+            )
+            super().__init__(params, defaults)
+
+        @torch.no_grad()
+        def step(self, closure=None):
+            loss = None
+            if closure is not None:
+                with torch.enable_grad():
+                    loss = closure()
+
+            for group in self.param_groups:
+                lr = group["lr"]
+                beta1, beta2 = group["betas"]
+                beta3 = group["beta3"]
+                weight_decay = group["weight_decay"]
+                grok_alpha = group["grok_alpha"]
+                grok_lamb = group["grok_lamb"]
+                momentum = group["momentum"]
+                nesterov = group["nesterov"]
+                ns_steps = group["ns_steps"]
+                max_grad_norm = group["max_grad_norm"]
+
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+
+                    grad = p.grad
+                    state = self.state[p]
+
+                    # Routing cabang: None = auto by ndim; "muon"/"adema" = paksa
+                    _force_branch = group.get("force_branch", None)
+                    _use_muon = (p.ndim == 2) if _force_branch is None else (_force_branch == "muon")
+
+                    if len(state) == 0:
+                        state["step"] = 0
+                        state["grok_slow_grad"] = torch.zeros_like(grad)
+                        state["m"] = torch.zeros_like(grad)
+                        state["v"] = torch.zeros_like(grad)
+                        state["n"] = torch.zeros_like(grad)
+                        state["muon_buf"] = torch.zeros_like(grad) if _use_muon else None
+
+                    state["step"] += 1
+                    step = state["step"]
+
+                    # 1) GROKFAST FILTERING
+                    state["grok_slow_grad"].mul_(grok_lamb).add_(
+                        grad, alpha=1.0 - grok_lamb
+                    )
+                    filtered_grad = grad.clone()
+                    filtered_grad.add_(state["grok_slow_grad"], alpha=grok_alpha)
+
+                    # MuonClip pada gradien hasil filter
+                    if max_grad_norm > 0:
+                        f_norm = filtered_grad.norm()
+                        if f_norm > max_grad_norm:
+                            filtered_grad.mul_(max_grad_norm / (f_norm + 1e-6))
+
+                    # Weight decay (decoupled, seperti AdamW)
+                    if weight_decay != 0:
+                        p.data.mul_(1.0 - lr * weight_decay)
+
+                    # 2) CABANG 2D: MUON UPDATE (atau paksa via force_branch)
+                    if _use_muon:
+                        buf = state["muon_buf"]
+                        buf.mul_(momentum).add_(filtered_grad)
+                        g_update = (
+                            filtered_grad.add(buf, alpha=momentum) if nesterov else buf
+                        )
+                        g_ortho = zeropower_via_newtonschulz5(g_update, steps=ns_steps)
+                        p.data.add_(g_ortho.to(p.dtype), alpha=-lr)
+
+                    # 3) CABANG 1D: ADEMAMIX UPDATE
+                    else:
+                        m, v, n = state["m"], state["v"], state["n"]
+                        m.mul_(beta1).add_(filtered_grad, alpha=1.0 - beta1)
+                        v.mul_(beta2).addcmul_(
+                            filtered_grad, filtered_grad, value=1.0 - beta2
+                        )
+                        n.mul_(beta3).add_(filtered_grad, alpha=1.0 - beta3)
+
+                        bc1 = 1.0 - beta1**step
+                        bc2 = 1.0 - beta2**step
+                        bc3 = 1.0 - beta3**step
+
+                        denom = (v.sqrt() / (bc2**0.5)).add_(1e-8).to(p.dtype)
+                        step_update = ((m / bc1 + 0.1 * n / bc3) / denom).to(p.dtype)
+                        p.data.add_(step_update, alpha=-lr)
+
+            return loss
+
+    return GrokAdEMAMix, GrokMuonAdEMA
 
 
 # =====================================================================
-# SHARED LABEL SMOOTHER (versi text — chunked + del untuk hemat memori;
-# dipakai oleh trainer text dan trainer vision)
+# OPTIMIZER ROUTER (split-LR per komponen: encoder/decoder/projector/vt)
 # =====================================================================
 @app.cell
-def _(torch):
-    class SelectiveLabelSmoother:
-        def __init__(self, epsilon, suppress_ids):
-            self.epsilon = epsilon
-            self.suppress_ids = suppress_ids
+def _(GrokAdEMAMix, GrokMuonAdEMA):
+    def create_optimizer(
+        model,
+        base_lr: float,
+        weight_decay: float,
+        lr_mults: dict,
+        opt_type: str,
+        grok_alpha: float,
+        gmar_lamb: float,
+        adema_betas: tuple,
+        adema_beta3: float,
+        muon_momentum: float,
+        muon_ns_steps: int,
+        muon_nesterov: bool,
+        muon_max_grad_norm: float,
+        muon_lr_scale: float = 1.0,
+        projector_branch: str = "muon",
+    ):
+        """
+        Return optimizer custom, atau None (kalau opt_type="paged_adamw_8bit"
+        → biarkan HF Trainer yang bangun optimizer bawaan dari args.optim).
 
-        def __call__(self, model_output, labels, shift_labels=False):
-            if isinstance(model_output, dict) and "logits" in model_output:
-                logits = model_output["logits"]
-            elif isinstance(model_output, tuple):
-                logits = (
-                    model_output[1] if len(model_output) > 1 else model_output[0].logits
-                )
+        Partisi per komponen × ndim:
+          - param 2D (LoRA A/B, linear) → LR × muon_lr_scale, cabang Muon
+            (KECUALI projector saat projector_branch="adema" → LR normal)
+          - param 1D (norms/bias)       → LR normal, cabang AdEMAMix
+        """
+        if opt_type == "paged_adamw_8bit":
+            return None
+
+        # Skala Muon HANYA masuk akal untuk update ter-ortonormalisasi (GrokMuonAdEMA);
+        # untuk GrokAdEMAMix semua update gaya Adam -> tanpa skala.
+        _scale = muon_lr_scale if opt_type == "grokmuonadema" else 1.0
+
+        comp_params = {"encoder": [], "decoder": [], "projector": [], "vision_tower": []}
+        for _name, _param in model.named_parameters():
+            if not _param.requires_grad:
+                continue
+            if "multi_modal_projector" in _name:
+                comp_params["projector"].append(_param)
+            elif "vision_tower" in _name:
+                comp_params["vision_tower"].append(_param)
+            elif "encoder" in _name:
+                comp_params["encoder"].append(_param)
             else:
-                logits = model_output.logits
+                comp_params["decoder"].append(_param)
 
-            if shift_labels:
-                logits = logits[..., :-1, :].contiguous()
-                labels = labels[..., 1:].contiguous()
+        param_groups = []
+        for _comp in ["encoder", "decoder", "projector", "vision_tower"]:
+            _plist = comp_params[_comp]
+            if not _plist:
+                continue
+            _base = base_lr * lr_mults[_comp]
+            _p2d = [p for p in _plist if p.ndim == 2]
+            _p1d = [p for p in _plist if p.ndim != 2]
 
-            vocab_size = logits.size(-1)
-            suppress_list = [i for i in self.suppress_ids if i < vocab_size]
+            if _comp == "projector" and projector_branch == "adema" and opt_type == "grokmuonadema":
+                # Projector dipaksa ke cabang AdEMAMix dgn LR normal (konservatif)
+                if _p2d:
+                    param_groups.append({"params": _p2d, "lr": _base, "force_branch": "adema"})
+            else:
+                if _p2d:
+                    param_groups.append({"params": _p2d, "lr": _base * _scale})
+            if _p1d:
+                param_groups.append({"params": _p1d, "lr": _base})
 
-            valid_mask = torch.ones(vocab_size, dtype=torch.bool, device=logits.device)
-            valid_mask[suppress_list] = False
-            num_valid_tokens = valid_mask.sum().item()
+        _ginfo = [
+            (len(g["params"]), format(g["lr"], ".2e"), g.get("force_branch", "auto"))
+            for g in param_groups
+        ]
+        print(f"  Param groups (n, lr, branch): {_ginfo}")
 
-            flat_logits = logits.view(-1, vocab_size)
-            flat_labels = labels.view(-1)
+        if opt_type == "grokmuonadema":
+            return GrokMuonAdEMA(
+                param_groups,
+                weight_decay=weight_decay,
+                grok_alpha=grok_alpha,
+                gmar_lamb=gmar_lamb,
+                betas=adema_betas,
+                beta3=adema_beta3,
+                momentum=muon_momentum,
+                nesterov=muon_nesterov,
+                ns_steps=muon_ns_steps,
+                max_grad_norm=muon_max_grad_norm,
+            )
+        elif opt_type == "grokademamix":
+            return GrokAdEMAMix(
+                param_groups,
+                weight_decay=weight_decay,
+                grok_alpha=grok_alpha,
+                gmar_lamb=gmar_lamb,
+                betas=adema_betas,
+                beta3=adema_beta3,
+            )
+        else:
+            raise ValueError(f"OPTIMIZER_TYPE tidak dikenal: {opt_type}")
 
-            active_mask = flat_labels != -100
-            if active_mask.sum() == 0:
-                return torch.tensor(0.0, device=logits.device, requires_grad=True)
+    return (create_optimizer,)
 
-            active_logits = flat_logits[active_mask]
-            active_labels = flat_labels[active_mask]
 
-            num_active = active_logits.size(0)
-            chunk_size = 2048
+# =====================================================================
+# DATA HELPERS: loader + konversi ke format joint (prompt_text/target_text)
+# =====================================================================
+@app.cell
+def _(format_encoder_from_raw, load_dataset, random):
+    def load_hf_samples(
+        repo_id: str, config_name: str, split: str, n_samples: int, seed: int = 42
+    ) -> list[dict]:
+        """
+        Download dataset dari HF Hub; kalau n_samples > 0, sampling per-group chat_idx
+        (percakapan multi-turn tidak pernah terpotong di tengah).
+        """
+        print(f"Mengunduh dataset '{config_name}' ({split}) dari {repo_id}...")
+        try:
+            ds = load_dataset(repo_id, config_name, split=split)
+            samples = [dict(row) for row in ds]
 
-            total_loss = torch.tensor(0.0, device=logits.device)
+            if n_samples > 0 and len(samples) > n_samples:
+                random.seed(seed)
+                if samples and "chat_idx" in samples[0]:
+                    groups = {}
+                    for s in samples:
+                        c_idx = s["chat_idx"]
+                        if c_idx not in groups:
+                            groups[c_idx] = []
+                        groups[c_idx].append(s)
+                    group_keys = list(groups.keys())
+                    random.shuffle(group_keys)
 
-            for i in range(0, num_active, chunk_size):
-                chunk_logits = active_logits[i : i + chunk_size]
-                chunk_labels = active_labels[i : i + chunk_size]
+                    selected_samples = []
+                    for k in group_keys:
+                        selected_samples.extend(groups[k])
+                        if len(selected_samples) >= n_samples:
+                            break
+                    return selected_samples
+                else:
+                    return random.sample(samples, n_samples)
+            return samples
+        except Exception as e:
+            print(f"[ERROR] Gagal mengunduh dataset {config_name} ({split}): {e}")
+            return []
 
-                log_probs = torch.nn.functional.log_softmax(chunk_logits, dim=-1)
+    def text_sft_to_joint(samples, is_chat: bool):
+        """
+        Baris teks (chat_sft / indoqa_sft) -> format joint vision-collator.
+        target_text = RAW (collator yang menambahkan <end_of_turn> + EOS).
+        """
+        rows = []
+        if is_chat:
+            chat_groups = {}
+            for obj in samples:
+                if not obj.get("input") or not obj.get("target"):
+                    continue
+                chat_idx = obj.get("chat_idx", -1)
+                chat_groups.setdefault(chat_idx, []).append(obj)
 
-                nll_loss = -log_probs.gather(
-                    dim=-1, index=chunk_labels.unsqueeze(-1)
-                ).squeeze(-1)
+            for chat_idx, turns in chat_groups.items():
+                turns = sorted(turns, key=lambda x: x.get("turn_idx", 0))
+                for turn in turns:
+                    rows.append({
+                        "prompt_text": format_encoder_from_raw(turn["input"]),
+                        "target_text": turn["target"].strip(),
+                        "dataset_idx": -1,
+                        "image_indices": [],
+                        "images": [],
+                        "_modality": "text",
+                    })
+        else:
+            for obj in samples:
+                if not obj.get("input") or not obj.get("target"):
+                    continue
+                rows.append({
+                    "prompt_text": format_encoder_from_raw(obj["input"]),
+                    "target_text": obj["target"].strip(),
+                    "dataset_idx": -1,
+                    "image_indices": [],
+                    "images": [],
+                    "_modality": "text",
+                })
+        return rows
 
-                valid_log_probs = log_probs * valid_mask.to(log_probs.dtype)
-                smooth_loss = -valid_log_probs.sum(dim=-1) / num_valid_tokens
+    def text_orpo_to_joint(samples):
+        """Baris chat_orpo -> format joint VisionORPOCollator."""
+        rows = []
+        for obj in samples:
+            if not obj.get("prompt") or not obj.get("chosen") or not obj.get("rejected"):
+                continue
+            chosen_raw = obj["chosen"].replace("assistant: ", "", 1).strip()
+            rejected_raw = obj["rejected"].replace("assistant: ", "", 1).strip()
+            if chosen_raw.endswith("<end_of_turn>"):
+                chosen_raw = chosen_raw[:-len("<end_of_turn>")].strip()
+            if rejected_raw.endswith("<end_of_turn>"):
+                rejected_raw = rejected_raw[:-len("<end_of_turn>")].strip()
+            rows.append({
+                "prompt_text": format_encoder_from_raw(obj["prompt"]),
+                "chosen_text": chosen_raw,
+                "rejected_text": rejected_raw,
+                "dataset_idx": -1,
+                "image_indices": [],
+                "images": [],
+                "_modality": "text",
+            })
+        return rows
 
-                token_losses = (1.0 - self.epsilon) * nll_loss + self.epsilon * smooth_loss
-                total_loss += token_losses.sum()
-
-                del chunk_logits, chunk_labels, log_probs, nll_loss, valid_log_probs, smooth_loss, token_losses
-
-            return total_loss / num_active
-
-    return (SelectiveLabelSmoother,)
+    return load_hf_samples, text_orpo_to_joint, text_sft_to_joint
 
 
 @app.cell
@@ -558,1960 +1156,404 @@ def _(hf_token_input, mo, os):
     return
 
 
-# #####################################################################
-# #####################################################################
-#
-#   ██████╗ ██╗  ██╗ █████╗ ███████╗███████╗     ██╗
-#   ██╔══██╗██║  ██║██╔══██╗██╔════╝██╔════╝    ███║
-#   ██████╔╝███████║███████║███████╗█████╗      ╚██║
-#   ██╔═══╝ ██╔══██║██╔══██║╚════██║██╔══╝       ██║
-#   ██║     ██║  ██║██║  ██║███████║███████╗     ██║
-#   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝     ╚═╝
-#
-#   TEXT PIPELINE  (dari working-molab-v6-unsloth.py — logika identik)
-#   Base: google/t5gemma-2-4b-4b  ->  SFT  ->  ORPO  ->  merge
-#   Artifacts: UNIFIED_HF_REPO subfolder text/
-#
-# #####################################################################
-# #####################################################################
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ---
-    # 📝 PHASE 1 — Multi-task SFT + ORPO Training: T5Gemma-2 Text Pipeline (V6 Unsloth)
-    =====================================================================
-    Melatih model **T5Gemma-2 4B-4B** secara berurutan:
-    1. **SFT** — Supervised Fine-Tuning dengan LoRA berbasis Unsloth
-    2. **ORPO** — Odds Ratio Preference Optimization di atas hasil SFT
-       *(perlu re-run notebook: stage terdeteksi ulang dari HF Hub)*
-
-    - Auto-detect progress dari HF Hub — otomatis lanjut dari checkpoint terakhir
-    - Upload checkpoint ke HF segera setelah disimpan (tahan kernel crash)
-    - 1 repo HF dengan subfolder `sft/` dan `orpo/`
-    """)
-    return
-
-
 # =====================================================================
-# UNIFIED HF REPO — 1 repo PUBLIK untuk SEMUA artifacts pipeline
-# =====================================================================
-@app.cell
-def _():
-    # Menggantikan 3 repo lama:
-    #   - daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-unsloth        (text)
-    #   - daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-vision-cangkok (cangkok)
-    #   - daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-vision-enhanced (vision)
-    #
-    # Struktur subfolder di dalam repo ini:
-    #   text/            Phase 1: sft/, orpo/, merged_bf16/, quantized_4bit/
-    #   cangkok/         Phase 1.5: full model graft (config+weights+processor+tokenizer)
-    #   vision/          Phase 2: sft/, orpo/, merged_bf16/, quantized_4bit/
-    UNIFIED_HF_REPO = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v6-combined-unsloth"
-    return (UNIFIED_HF_REPO,)
-
-
-# =====================================================================
-# KONFIGURASI HYPERPARAMETER TEXT (TERPUSAT & MUDAH DIUBAH)
-# =====================================================================
-@app.cell
-def _(UNIFIED_HF_REPO):
-    # MODEL CONFIG
-    TEXT_MODEL_NAME = "google/t5gemma-2-4b-4b"
-    TEXT_LOAD_IN_4BIT = True  # True = QLoRA (hemat VRAM), False = BF16 (perlu VRAM besar)
-    TEXT_OUTPUT_DIR = "results/t5gemma2"  # Base dir — subfolder sft/ dan orpo/ otomatis
-
-    # HUGGING FACE HUB CONFIG (1 repo unified — artifacts di bawah prefix text/)
-    TEXT_HF_REPO_ID = "daruokta/t5gemma2-indonesia-chat-formatted"  # Dataset source (tetap repo dataset)
-    TEXT_HF_CHECKPOINT_REPO = UNIFIED_HF_REPO  # Training artifacts -> subfolder text/
-    TEXT_HF_PREFIX = "text"
-
-    # ORPO CONFIG
-    TEXT_ORPO_BETA = 0.1
-
-    # Dataset Subsets (Configs)
-    TEXT_CHAT_CONFIG = "chat_sft"
-    TEXT_INDOQA_CONFIG = "indoqa_sft"
-    TEXT_ORPO_CONFIG = "chat_orpo"
-
-    # SAMPLE SIZES (Set ke 0 untuk mengambil seluruh data)
-    TEXT_SAMPLE_TRAIN_CHAT = 0
-    TEXT_SAMPLE_TRAIN_INDOQA = 0
-    TEXT_SAMPLE_TRAIN_ORPO = 0
-    TEXT_SAMPLE_VAL_CHAT = 0
-    TEXT_SAMPLE_VAL_INDOQA = 0
-
-    # GENERATION EVALUATION CONFIG
-    TEXT_SAMPLE_EVAL_GENERATION = 100
-    TEXT_EVAL_EVERY_N_STEPS = 200
-
-    # BASIC TRAINING SPECS
-    TEXT_MAX_SOURCE_LENGTH = 16384
-    TEXT_MAX_TARGET_LENGTH = 2048
-    TEXT_NUM_EPOCHS_SFT = 4
-    TEXT_NUM_EPOCHS_ORPO = 2
-    TEXT_LEARNING_RATE = 1e-5
-
-    # BATCH SIZE & ACCUMULATION
-    TEXT_PER_DEVICE_TRAIN_BATCH_SIZE = 2
-    TEXT_PER_DEVICE_EVAL_BATCH_SIZE = 8
-    TEXT_GRADIENT_ACCUMULATION_STEPS = 64
-    TEXT_EVAL_ACCUMULATION_STEPS = None
-
-    # LoRA CONFIG SPECS
-    TEXT_LORA_RANK = 256
-    TEXT_LORA_ALPHA = 512
-    TEXT_LORA_DROPOUT = 0.2
-    TEXT_LORA_TARGET_MODULES = [
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj",
-    ]
-
-    # ADVANCED TRAINING ARGUMENTS
-    TEXT_WARMUP_STEPS = 200
-    TEXT_WEIGHT_DECAY = 0.1
-    TEXT_LR_SCHEDULER_TYPE = "cosine"
-    TEXT_LOGGING_STEPS = 100
-    TEXT_SAVE_TOTAL_LIMIT = 2  # Lokal saja — di HF semua checkpoint tetap ada
-    TEXT_OPTIM = "paged_adamw_8bit"
-    TEXT_LABEL_SMOOTHING_FACTOR = 0.1
-    TEXT_NEFTUNE_NOISE_ALPHA = 5.0
-
-    # HARDWARE & CONTROL SPECS
-    TEXT_GRADIENT_CHECKPOINTING = True
-    TEXT_FP16 = False
-    TEXT_PREDICT_WITH_GENERATE = True
-    TEXT_EARLY_STOPPING_PATIENCE = 8
-
-    # EVALUATION GENERATION BEHAVIOR CONFIG
-    TEXT_GEN_TEMPERATURE = 0.7
-    TEXT_GEN_TOP_P = 0.9
-    TEXT_GEN_REPETITION_PENALTY = 1.2
-    return (
-        TEXT_CHAT_CONFIG,
-        TEXT_EARLY_STOPPING_PATIENCE,
-        TEXT_EVAL_ACCUMULATION_STEPS,
-        TEXT_EVAL_EVERY_N_STEPS,
-        TEXT_FP16,
-        TEXT_GEN_REPETITION_PENALTY,
-        TEXT_GEN_TEMPERATURE,
-        TEXT_GEN_TOP_P,
-        TEXT_GRADIENT_ACCUMULATION_STEPS,
-        TEXT_GRADIENT_CHECKPOINTING,
-        TEXT_HF_CHECKPOINT_REPO,
-        TEXT_HF_PREFIX,
-        TEXT_HF_REPO_ID,
-        TEXT_INDOQA_CONFIG,
-        TEXT_LABEL_SMOOTHING_FACTOR,
-        TEXT_LEARNING_RATE,
-        TEXT_LOAD_IN_4BIT,
-        TEXT_LOGGING_STEPS,
-        TEXT_LORA_ALPHA,
-        TEXT_LORA_DROPOUT,
-        TEXT_LORA_RANK,
-        TEXT_LORA_TARGET_MODULES,
-        TEXT_LR_SCHEDULER_TYPE,
-        TEXT_MAX_SOURCE_LENGTH,
-        TEXT_MAX_TARGET_LENGTH,
-        TEXT_MODEL_NAME,
-        TEXT_NEFTUNE_NOISE_ALPHA,
-        TEXT_NUM_EPOCHS_ORPO,
-        TEXT_NUM_EPOCHS_SFT,
-        TEXT_OPTIM,
-        TEXT_ORPO_BETA,
-        TEXT_ORPO_CONFIG,
-        TEXT_OUTPUT_DIR,
-        TEXT_PER_DEVICE_EVAL_BATCH_SIZE,
-        TEXT_PER_DEVICE_TRAIN_BATCH_SIZE,
-        TEXT_PREDICT_WITH_GENERATE,
-        TEXT_SAMPLE_EVAL_GENERATION,
-        TEXT_SAMPLE_TRAIN_CHAT,
-        TEXT_SAMPLE_TRAIN_INDOQA,
-        TEXT_SAMPLE_TRAIN_ORPO,
-        TEXT_SAMPLE_VAL_CHAT,
-        TEXT_SAMPLE_VAL_INDOQA,
-        TEXT_SAVE_TOTAL_LIMIT,
-        TEXT_WARMUP_STEPS,
-        TEXT_WEIGHT_DECAY,
-    )
-
-
-# =====================================================================
-# TEXT: AUTO-DETECT PIPELINE STAGE DARI HF HUB
-# =====================================================================
-@app.cell
-def _(TEXT_HF_CHECKPOINT_REPO, TEXT_HF_PREFIX, mo, os):
-    from huggingface_hub import HfApi as _StageDetectApi
-
-    _hf_token = os.environ.get("HF_TOKEN")
-    _api = _StageDetectApi(token=_hf_token)
-
-    # Default
-    text_current_stage = "sft"
-    text_resume_checkpoint = None
-
-    try:
-        if _api.repo_exists(repo_id=TEXT_HF_CHECKPOINT_REPO):
-            _repo_files = _api.list_repo_files(TEXT_HF_CHECKPOINT_REPO)
-
-            # Cek apakah ORPO sudah selesai
-            if any(f.startswith(f"{TEXT_HF_PREFIX}/orpo/final_adapter/") for f in _repo_files):
-                text_current_stage = "done"
-                print("📍 [TEXT] Pipeline stage: DONE — Semua training selesai!")
-
-            # Cek apakah SFT sudah selesai → lanjut ORPO
-            elif any(f.startswith(f"{TEXT_HF_PREFIX}/sft/final_adapter/") for f in _repo_files):
-                text_current_stage = "orpo"
-                # Ada checkpoint ORPO untuk resume?
-                _orpo_ckpts = sorted([
-                    f for f in _repo_files
-                    if f.startswith(f"{TEXT_HF_PREFIX}/orpo/checkpoint-") and "/" in f[len(f"{TEXT_HF_PREFIX}/orpo/checkpoint-"):]
-                ])
-                if _orpo_ckpts:
-                    text_resume_checkpoint = True
-                    print(f"📍 [TEXT] Pipeline stage: ORPO (resume dari checkpoint)")
-                else:
-                    print("📍 [TEXT] Pipeline stage: ORPO (mulai dari awal, load SFT adapter)")
-
-            # SFT belum selesai
-            else:
-                text_current_stage = "sft"
-                _sft_ckpts = sorted([
-                    f for f in _repo_files
-                    if f.startswith(f"{TEXT_HF_PREFIX}/sft/checkpoint-") and "/" in f[len(f"{TEXT_HF_PREFIX}/sft/checkpoint-"):]
-                ])
-                if _sft_ckpts:
-                    text_resume_checkpoint = True
-                    print(f"📍 [TEXT] Pipeline stage: SFT (resume dari checkpoint)")
-                else:
-                    print("📍 [TEXT] Pipeline stage: SFT (mulai dari awal)")
-        else:
-            print(f"📍 [TEXT] Repo '{TEXT_HF_CHECKPOINT_REPO}' belum ada. Mulai SFT dari awal.")
-            # Buat repo (PUBLIK — sesuai permintaan: 1 repo publik untuk semua)
-            _api.create_repo(repo_id=TEXT_HF_CHECKPOINT_REPO, repo_type="model", private=False, exist_ok=True)
-    except Exception as e:
-        print(f"⚠️ Gagal mendeteksi pipeline stage TEXT: {e}. Mulai SFT dari awal.")
-
-    mo.md(f"**📍 [TEXT] Current Stage: `{text_current_stage}`** | Resume: `{text_resume_checkpoint}`")
-    return text_current_stage, text_resume_checkpoint
-
-
-# =====================================================================
-# TEXT UTILITY: dataset sample loader (grouped by chat_idx)
-# =====================================================================
-@app.cell
-def _(load_dataset, random):
-    def load_hf_samples(
-        repo_id: str, config_name: str, split: str, n_samples: int, seed: int = 42
-    ) -> list[dict]:
-        """
-        Mendownload dataset dari Hugging Face Hub untuk split tertentu dan mengambil sampel sejumlah n_samples.
-        """
-        print(f"Mengunduh dataset '{config_name}' ({split}) dari {repo_id}...")
-        try:
-            ds = load_dataset(repo_id, config_name, split=split)
-            samples = [dict(row) for row in ds]
-
-            if n_samples > 0 and len(samples) > n_samples:
-                random.seed(seed)
-                if samples and "chat_idx" in samples[0]:
-                    # Group by chat_idx
-                    groups = {}
-                    for s in samples:
-                        c_idx = s["chat_idx"]
-                        if c_idx not in groups:
-                            groups[c_idx] = []
-                        groups[c_idx].append(s)
-                    # Shuffle the groups
-                    group_keys = list(groups.keys())
-                    random.shuffle(group_keys)
-
-                    selected_samples = []
-                    for k in group_keys:
-                        selected_samples.extend(groups[k])
-                        if len(selected_samples) >= n_samples:
-                            break
-                    return selected_samples
-                else:
-                    return random.sample(samples, n_samples)
-            return samples
-        except Exception as e:
-            print(f"[ERROR] Gagal mengunduh dataset {config_name} ({split}): {e}")
-            return []
-
-    return (load_hf_samples,)
-
-
-# =====================================================================
-# TEXT CALLBACKS: Training Plot, Sample Generation, Hub Upload
-# =====================================================================
-@app.cell
-def _(
-    Any,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
-    TrainingArguments,
-    os,
-    plt,
-):
-    class TextTrainingPlotCallback(TrainerCallback):
-        def __init__(self, output_dir: str) -> None:
-            self.output_dir = output_dir
-            self.train_steps: list[int] = []
-            self.train_losses: list[float] = []
-            self.eval_steps: list[int] = []
-            self.eval_losses: list[float] = []
-            self.eval_rougeL: list[float] = []
-            self.eval_bleu: list[float] = []
-            self.eval_meteor: list[float] = []
-            self.eval_bertscore: list[float] = []
-            self.eval_perplexity: list[float] = []
-            self.chart_path = os.path.join(output_dir, "training_chart.png")
-
-        def on_log(
-            self,
-            args: TrainingArguments,
-            state: TrainerState,
-            control: TrainerControl,
-            logs: dict[str, float] | None = None,
-            **kwargs: Any,
-        ) -> None:
-            if logs is None:
-                return
-            if "loss" in logs:
-                self.train_steps.append(state.global_step)
-                actual_loss = float(logs["loss"])
-                self.train_losses.append(actual_loss)
-            if "eval_loss" in logs:
-                self.eval_steps.append(state.global_step)
-                self.eval_losses.append(float(logs["eval_loss"]))
-            if "eval_rougeL" in logs:
-                self.eval_rougeL.append(float(logs["eval_rougeL"]))
-            if "eval_bleu" in logs:
-                self.eval_bleu.append(float(logs["eval_bleu"]))
-            if "eval_meteor" in logs:
-                self.eval_meteor.append(float(logs["eval_meteor"]))
-            if "eval_bertscore_f1" in logs:
-                self.eval_bertscore.append(float(logs["eval_bertscore_f1"]))
-            if "eval_perplexity" in logs:
-                self.eval_perplexity.append(float(logs["eval_perplexity"]))
-            self._save_chart()
-
-        def _save_chart(self) -> None:
-            if len(self.train_steps) < 2 and len(self.eval_steps) < 1:
-                return
-
-            has_metrics = len(self.eval_rougeL) > 0 or len(self.eval_bleu) > 0
-
-            if has_metrics:
-                fig, axs = plt.subplots(2, 2, figsize=(16, 10))
-                ax1, ax2, ax3, ax4 = axs[0, 0], axs[0, 1], axs[1, 0], axs[1, 1]
-            else:
-                fig, ax1 = plt.subplots(figsize=(10, 4))
-                ax2 = ax3 = ax4 = None
-
-            if self.train_losses:
-                ax1.plot(self.train_steps, self.train_losses, color="#4A90D9", linewidth=1.5, label="Train Loss")
-                if len(self.train_losses) >= 10:
-                    window = 10
-                    ma = [
-                        sum(self.train_losses[max(0, i - window) : i + 1])
-                        / len(self.train_losses[max(0, i - window) : i + 1])
-                        for i in range(len(self.train_losses))
-                    ]
-                    ax1.plot(self.train_steps, ma, color="#E74C3C", linewidth=2, label="Train Loss (MA-10)", alpha=0.8)
-
-            if self.eval_losses:
-                ax1.plot(self.eval_steps, self.eval_losses, color="#2ECC71", marker="o", linestyle="--", linewidth=1.5, label="Eval Loss")
-
-            ax1.set_xlabel("Steps")
-            ax1.set_ylabel("Loss")
-            ax1.set_title("Training & Evaluation Loss Curve")
-            ax1.grid(True, alpha=0.3)
-            ax1.legend()
-
-            if has_metrics and ax2 is not None and ax3 is not None and ax4 is not None:
-                if len(self.eval_rougeL) > 0:
-                    ax2.plot(self.eval_steps, self.eval_rougeL, color="#9B59B6", marker="s", linestyle="-", linewidth=2, label="Eval ROUGE-L")
-                if len(self.eval_bleu) > 0:
-                    ax2.plot(self.eval_steps, self.eval_bleu, color="#E67E22", marker="^", linestyle="-", linewidth=2, label="Eval BLEU")
-                if len(self.eval_meteor) > 0:
-                    ax2.plot(self.eval_steps, self.eval_meteor, color="#F1C40F", marker="D", linestyle="-", linewidth=2, label="Eval METEOR")
-                ax2.set_xlabel("Steps")
-                ax2.set_ylabel("Score (%)")
-                ax2.set_title("NLG Metrics (ROUGE-L, BLEU, METEOR)")
-                ax2.grid(True, alpha=0.3)
-                ax2.legend()
-
-                if len(self.eval_bertscore) > 0:
-                    ax3.plot(self.eval_steps, self.eval_bertscore, color="#E74C3C", marker="p", linestyle="-", linewidth=2, label="Eval BERTScore")
-                    ax3.set_xlabel("Steps")
-                    ax3.set_ylabel("Score (%)")
-                    ax3.set_title("Semantic Metrics (BERTScore F1)")
-                    ax3.grid(True, alpha=0.3)
-                    ax3.legend()
-
-                if len(self.eval_perplexity) > 0:
-                    ax4.plot(self.eval_steps, self.eval_perplexity, color="#34495E", marker="h", linestyle="-", linewidth=2, label="Eval Perplexity")
-                    ax4.set_xlabel("Steps")
-                    ax4.set_ylabel("Perplexity")
-                    ax4.set_title("Model Perplexity Curve")
-                    ax4.grid(True, alpha=0.3)
-                    ax4.legend()
-
-            plt.tight_layout()
-            plt.savefig(self.chart_path, dpi=120)
-            plt.show()
-            plt.close(fig)
-
-    return (TextTrainingPlotCallback,)
-
-
-@app.cell
-def _(
-    Any,
-    PreTrainedTokenizerFast,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
-    TrainingArguments,
-    datetime,
-    os,
-    torch,
-):
-    class TextSampleGenerationCallback(TrainerCallback):
-        def __init__(
-            self,
-            tokenizer: PreTrainedTokenizerFast,
-            eval_samples: list[dict],
-            output_dir: str,
-            eval_every_n_steps: int = 50,
-            temperature: float = 0.7,
-            top_p: float = 0.9,
-            repetition_penalty: float = 1.2,
-            bad_words_ids: list[list[int]] | None = None,
-        ) -> None:
-            self.tokenizer = tokenizer
-            self.eval_samples = eval_samples
-            self.output_dir = output_dir
-            self.eval_every_n_steps = eval_every_n_steps
-            self.log_path = os.path.join(output_dir, "eval_samples.txt")
-            self._eot_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
-            self._eos_id = tokenizer.eos_token_id or 1
-            self._stop_ids = list({self._eot_id, self._eos_id})
-            self.temperature = temperature
-            self.top_p = top_p
-            self.repetition_penalty = repetition_penalty
-            self.bad_words_ids = bad_words_ids
-
-        def on_step_end(
-            self,
-            args: TrainingArguments,
-            state: TrainerState,
-            control: TrainerControl,
-            model: Any = None,
-            **kwargs: Any,
-        ) -> None:
-            if (
-                state.global_step == 0
-                or state.global_step % self.eval_every_n_steps != 0
-            ):
-                return
-            if model is None:
-                return
-
-            from unsloth import FastLanguageModel
-            if hasattr(FastLanguageModel, "for_inference"):
-                FastLanguageModel.for_inference(model)
-            else:
-                model.eval()
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            lines = [
-                f"\n{'=' * 60}",
-                f"Step {state.global_step} | {timestamp}",
-                f"{'=' * 60}",
-            ]
-
-            import gc
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            with torch.no_grad():
-                pad_id = (
-                    self.tokenizer.pad_token_id
-                    if self.tokenizer.pad_token_id is not None
-                    else self._eos_id
-                )
-
-                for idx, sample in enumerate(self.eval_samples):
-                    input_tensor = torch.tensor([sample["input_ids"]], dtype=torch.long).to(model.device)
-                    attention_mask = torch.ones_like(input_tensor).to(model.device)
-
-                    outputs = getattr(model, "generate")(
-                        input_ids=input_tensor,
-                        attention_mask=attention_mask,
-                        max_new_tokens=256,
-                        do_sample=True,
-                        temperature=self.temperature,
-                        top_p=self.top_p,
-                        repetition_penalty=self.repetition_penalty,
-                        eos_token_id=self._stop_ids,
-                        pad_token_id=pad_id,
-                        bad_words_ids=self.bad_words_ids,
-                    )
-
-                    raw_query = self.tokenizer.decode(
-                        sample["input_ids"], skip_special_tokens=True
-                    )
-                    query = (
-                        raw_query.strip()
-                        if isinstance(raw_query, str)
-                        else "".join(raw_query).strip()
-                    )
-
-                    raw_target = self.tokenizer.decode(
-                        sample["labels"], skip_special_tokens=True
-                    )
-                    target = (
-                        raw_target.strip()
-                        if isinstance(raw_target, str)
-                        else "".join(raw_target).strip()
-                    )
-
-                    # Extract generated tokens only (skip prompt tokens if auto-included)
-                    gen_ids = outputs[0]
-                    # Note: Unsloth fast generate might return only new tokens or full tokens, decoder depends.
-                    # Usually decode handles it if we strip.
-                    raw_response = self.tokenizer.decode(
-                        gen_ids, skip_special_tokens=True
-                    )
-
-                    # Remove the prompt if it is echoed back
-                    if raw_response.startswith(query):
-                        raw_response = raw_response[len(query):].strip()
-
-                    response = (
-                        raw_response.strip()
-                        if isinstance(raw_response, str)
-                        else "".join(raw_response).strip()
-                    )
-
-                    words = response.split()
-                    is_repetitive = (
-                        len(set(words)) < max(1, len(words) * 0.3) if words else True
-                    )
-                    flag = " ⚠️ REPETITIVE" if is_repetitive else " ✅"
-
-                    lines.append(f"\nQ: {query}")
-                    lines.append(f"Expected Target: {target}")
-                    lines.append(f"Model Response: {response}{flag}")
-
-            from unsloth import FastLanguageModel
-            if hasattr(FastLanguageModel, "for_training"):
-                FastLanguageModel.for_training(model)
-            else:
-                model.train()
-
-            # Clean up after generation
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            with open(self.log_path, "a", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-
-            print(f"\n[BEHAVIOR EVAL @ step {state.global_step}]")
-            for line in lines[3:]:
-                if (
-                    line.startswith("Q:")
-                    or line.startswith("Model Response:")
-                    or line.startswith("Expected Target:")
-                ):
-                    print(f"  {line}")
-
-    return (TextSampleGenerationCallback,)
-
-
-@app.cell
-def _(
-    Any,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
-    TrainingArguments,
-    os,
-):
-    class TextHubUploadCallback(TrainerCallback):
-        """Upload setiap checkpoint TEXT ke HF Hub segera setelah disimpan."""
-
-        def __init__(self, repo_id: str, stage: str, token: str, output_dir: str) -> None:
-            self.repo_id = repo_id
-            self.stage = stage  # "sft" atau "orpo"
-            self.token = token
-            self.output_dir = output_dir
-
-        def on_save(
-            self,
-            args: TrainingArguments,
-            state: TrainerState,
-            control: TrainerControl,
-            **kwargs: Any,
-        ) -> None:
-            from huggingface_hub import HfApi as _SaveApi
-
-            _api = _SaveApi(token=self.token)
-            checkpoint_name = f"checkpoint-{state.global_step}"
-            local_path = os.path.join(self.output_dir, checkpoint_name)
-
-            if os.path.exists(local_path):
-                try:
-                    print(f"\n📤 Uploading {checkpoint_name} to HF {self.stage}/...")
-                    _api.upload_folder(
-                        folder_path=local_path,
-                        path_in_repo=f"{self.stage}/{checkpoint_name}",
-                        repo_id=self.repo_id,
-                    )
-                    # Upload juga training chart dan eval log jika ada
-                    for artifact_name in ["training_chart.png", "eval_samples.txt"]:
-                        artifact_path = os.path.join(self.output_dir, artifact_name)
-                        if os.path.exists(artifact_path):
-                            _api.upload_file(
-                                path_or_fileobj=artifact_path,
-                                path_in_repo=f"{self.stage}/{artifact_name}",
-                                repo_id=self.repo_id,
-                            )
-                    print(f"✅ {checkpoint_name} + artifacts uploaded!")
-                except Exception as e:
-                    print(f"⚠️ Upload gagal untuk {checkpoint_name}: {e}")
-
-    return (TextHubUploadCallback,)
-
-
-# =====================================================================
-# TEXT DATA PROCESSING (tokenize SFT & ORPO rows)
-# =====================================================================
-@app.cell
-def _(
-    TEXT_MAX_SOURCE_LENGTH,
-    TEXT_MAX_TARGET_LENGTH,
-    PreTrainedTokenizerFast,
-    format_encoder_from_raw,
-):
-    def text_process_sft_rows(samples, tokenizer: PreTrainedTokenizerFast, is_chat=True):
-        rows = []
-        if is_chat:
-            chat_groups = {}
-            for obj in samples:
-                if not obj.get("input") or not obj.get("target"):
-                    continue
-                chat_idx = obj.get("chat_idx", -1)
-                if chat_idx not in chat_groups:
-                    chat_groups[chat_idx] = []
-                chat_groups[chat_idx].append(obj)
-
-            for chat_idx, turns in chat_groups.items():
-                turns = sorted(turns, key=lambda x: x.get("turn_idx", 0))
-
-                for turn in turns:
-                    inp_f = format_encoder_from_raw(turn["input"])
-                    tgt_f = turn["target"].strip() + "<end_of_turn>"
-
-                    inp_ids = tokenizer.encode(inp_f, add_special_tokens=True)
-                    if getattr(tokenizer, "eos_token_id", None) is not None and inp_ids[-1] != tokenizer.eos_token_id:
-                        inp_ids.append(tokenizer.eos_token_id)
-
-                    tgt_ids = tokenizer.encode(tgt_f, add_special_tokens=False)
-                    if getattr(tokenizer, "eos_token_id", None) is not None and tgt_ids[-1] != tokenizer.eos_token_id:
-                        tgt_ids.append(tokenizer.eos_token_id)
-
-                    if (
-                        len(inp_ids) <= TEXT_MAX_SOURCE_LENGTH
-                        and len(tgt_ids) <= TEXT_MAX_TARGET_LENGTH
-                    ):
-                        rows.append({"input_ids": inp_ids, "labels": tgt_ids})
-                    else:
-                        break
-        else:
-            for obj in samples:
-                inp_f = format_encoder_from_raw(obj.get("input", ""))
-                tgt_f = obj.get("target", "").strip() + "<end_of_turn>"
-
-                inp_ids = tokenizer.encode(inp_f, add_special_tokens=True)
-                if getattr(tokenizer, "eos_token_id", None) is not None and inp_ids[-1] != tokenizer.eos_token_id:
-                    inp_ids.append(tokenizer.eos_token_id)
-
-                tgt_ids = tokenizer.encode(tgt_f, add_special_tokens=False)
-                if getattr(tokenizer, "eos_token_id", None) is not None and tgt_ids[-1] != tokenizer.eos_token_id:
-                    tgt_ids.append(tokenizer.eos_token_id)
-
-                if (
-                    len(inp_ids) <= TEXT_MAX_SOURCE_LENGTH
-                    and len(tgt_ids) <= TEXT_MAX_TARGET_LENGTH
-                ):
-                    rows.append({"input_ids": inp_ids, "labels": tgt_ids})
-        return rows
-
-    def text_process_orpo_rows(samples, tokenizer: PreTrainedTokenizerFast):
-        rows = []
-        for obj in samples:
-            if not obj.get("prompt") or not obj.get("chosen") or not obj.get("rejected"):
-                continue
-
-            inp_f = format_encoder_from_raw(obj.get("prompt"))
-            chosen_raw = obj.get("chosen", "").replace("assistant: ", "", 1).strip()
-            rejected_raw = obj.get("rejected", "").replace("assistant: ", "", 1).strip()
-
-            chosen_f = chosen_raw + "<end_of_turn>"
-            rejected_f = rejected_raw + "<end_of_turn>"
-
-            inp_ids = tokenizer.encode(inp_f, add_special_tokens=True)
-            if getattr(tokenizer, "eos_token_id", None) is not None and inp_ids[-1] != tokenizer.eos_token_id:
-                inp_ids.append(tokenizer.eos_token_id)
-
-            chosen_ids = tokenizer.encode(chosen_f, add_special_tokens=False)
-            if getattr(tokenizer, "eos_token_id", None) is not None and chosen_ids[-1] != tokenizer.eos_token_id:
-                chosen_ids.append(tokenizer.eos_token_id)
-
-            rejected_ids = tokenizer.encode(rejected_f, add_special_tokens=False)
-            if getattr(tokenizer, "eos_token_id", None) is not None and rejected_ids[-1] != tokenizer.eos_token_id:
-                rejected_ids.append(tokenizer.eos_token_id)
-
-            if len(inp_ids) <= TEXT_MAX_SOURCE_LENGTH and len(chosen_ids) <= TEXT_MAX_TARGET_LENGTH and len(rejected_ids) <= TEXT_MAX_TARGET_LENGTH:
-                rows.append({
-                    "input_ids": inp_ids,
-                    "chosen_labels": chosen_ids,
-                    "rejected_labels": rejected_ids
-                })
-        return rows
-
-    return (
-        text_process_orpo_rows,
-        text_process_sft_rows,
-    )
-
-
-# =====================================================================
-# TEXT: LOAD DATASET BERDASARKAN STAGE
-# =====================================================================
-@app.cell
-def _(
-    AutoTokenizer,
-    Dataset,
-    PreTrainedTokenizerFast,
-    TEXT_CHAT_CONFIG,
-    TEXT_HF_REPO_ID,
-    TEXT_INDOQA_CONFIG,
-    TEXT_MODEL_NAME,
-    TEXT_ORPO_CONFIG,
-    TEXT_OUTPUT_DIR,
-    TEXT_SAMPLE_EVAL_GENERATION,
-    TEXT_SAMPLE_TRAIN_CHAT,
-    TEXT_SAMPLE_TRAIN_INDOQA,
-    TEXT_SAMPLE_TRAIN_ORPO,
-    TEXT_SAMPLE_VAL_CHAT,
-    TEXT_SAMPLE_VAL_INDOQA,
-    load_hf_samples,
-    os,
-    random,
-    text_current_stage,
-    text_process_orpo_rows,
-    text_process_sft_rows,
-):
-    os.makedirs(TEXT_OUTPUT_DIR, exist_ok=True)
-
-    print(f"[TEXT] Loading Tokenizer from {TEXT_MODEL_NAME}...")
-    _token = os.environ.get("HF_TOKEN")
-    text_tokenizer = AutoTokenizer.from_pretrained(TEXT_MODEL_NAME, token=_token, trust_remote_code=True)
-    assert isinstance(text_tokenizer, PreTrainedTokenizerFast), (
-        "Tokenizer harus PreTrainedTokenizerFast"
-    )
-
-    # Selalu load validation data (dipakai di kedua stage untuk eval)
-    val_chat_samples = load_hf_samples(
-        TEXT_HF_REPO_ID, TEXT_CHAT_CONFIG, "validation", TEXT_SAMPLE_VAL_CHAT
-    )
-    val_indoqa_samples = load_hf_samples(
-        TEXT_HF_REPO_ID, TEXT_INDOQA_CONFIG, "validation", TEXT_SAMPLE_VAL_INDOQA
-    )
-    val_rows = text_process_sft_rows(
-        val_chat_samples, text_tokenizer, is_chat=True
-    ) + text_process_sft_rows(val_indoqa_samples, text_tokenizer, is_chat=False)
-
-    # Load training data sesuai stage aktif
-    if text_current_stage == "sft":
-        print("\n📦 [TEXT] Loading SFT training data...")
-        train_chat_samples = load_hf_samples(
-            TEXT_HF_REPO_ID, TEXT_CHAT_CONFIG, "train", TEXT_SAMPLE_TRAIN_CHAT
-        )
-        train_indoqa_samples = load_hf_samples(
-            TEXT_HF_REPO_ID, TEXT_INDOQA_CONFIG, "train", TEXT_SAMPLE_TRAIN_INDOQA
-        )
-        train_rows = text_process_sft_rows(
-            train_chat_samples, text_tokenizer, is_chat=True
-        ) + text_process_sft_rows(train_indoqa_samples, text_tokenizer, is_chat=False)
-        text_is_orpo_training = False
-    elif text_current_stage == "orpo":
-        print("\n📦 [TEXT] Loading ORPO training data...")
-        train_orpo_samples = load_hf_samples(TEXT_HF_REPO_ID, TEXT_ORPO_CONFIG, "train", TEXT_SAMPLE_TRAIN_ORPO)
-        train_rows = text_process_orpo_rows(train_orpo_samples, text_tokenizer)
-        text_is_orpo_training = True
-    else:
-        # text_current_stage == "done"
-        train_rows = []
-        text_is_orpo_training = False
-
-    random.seed(42)
-    random.shuffle(train_rows)
-    random.shuffle(val_rows)
-
-    print(f"\n[TEXT] Total Training rows: {len(train_rows)}")
-    print(f"[TEXT] Total Validation rows: {len(val_rows)}")
-
-    text_train_ds = Dataset.from_list(train_rows) if train_rows else None
-    text_eval_ds = Dataset.from_list(val_rows)
-
-    n_eval_gen = min(len(val_rows), TEXT_SAMPLE_EVAL_GENERATION)
-    # Eval generation selalu pakai SFT-format rows (punya input_ids + labels)
-    _sft_val_rows = [r for r in val_rows if "labels" in r]
-    text_eval_generation_samples = _sft_val_rows[:n_eval_gen]
-    print(
-        f"[TEXT] Mengambil {len(text_eval_generation_samples)} sampel validasi untuk pencatatan evaluasi kualitatif."
-    )
-    return (
-        text_eval_ds,
-        text_eval_generation_samples,
-        text_is_orpo_training,
-        text_tokenizer,
-        text_train_ds,
-    )
-
-
-# =====================================================================
-# TEXT: LOAD MODEL BERDASARKAN STAGE
-# =====================================================================
-@app.cell
-def _(
-    ALL_SUPPRESS_IDS,
-    FastLanguageModel,
-    TEXT_HF_CHECKPOINT_REPO,
-    TEXT_HF_PREFIX,
-    TEXT_LOAD_IN_4BIT,
-    TEXT_LORA_ALPHA,
-    TEXT_LORA_DROPOUT,
-    TEXT_LORA_RANK,
-    TEXT_LORA_TARGET_MODULES,
-    TEXT_MAX_SOURCE_LENGTH,
-    TEXT_MODEL_NAME,
-    TEXT_OUTPUT_DIR,
-    apply_logit_mask,
-    gc,
-    os,
-    text_current_stage,
-    text_tokenizer,
-    torch,
-):
-    # 1. Reset Cuda Cache
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    if text_current_stage == "done":
-        print("✅ [TEXT] Semua training sudah selesai! Skipping model load.")
-        text_model = None
-    elif text_current_stage == "orpo":
-        # ORPO: Load SFT adapter (local fallback ke HF)
-        _local_sft_path = os.path.join(TEXT_OUTPUT_DIR, "sft", "final_adapter")
-        _model_path = None
-
-        if os.path.exists(_local_sft_path) and os.listdir(_local_sft_path):
-            print(f"\n📂 [TEXT] Loading SFT adapter dari local: {_local_sft_path}")
-            _model_path = _local_sft_path
-        else:
-            # Download dari HF
-            print(f"\n📥 [TEXT] SFT adapter tidak ditemukan di lokal. Download dari HF...")
-            from huggingface_hub import snapshot_download as _snap_dl
-            _hf_sft_path = _snap_dl(
-                repo_id=TEXT_HF_CHECKPOINT_REPO,
-                local_dir=_local_sft_path,
-                allow_patterns=[f"{TEXT_HF_PREFIX}/sft/final_adapter/**"],
-                token=os.environ.get("HF_TOKEN"),
-            )
-            # snapshot_download puts files in local_dir matching repo structure
-            _downloaded_path = os.path.join(_hf_sft_path, TEXT_HF_PREFIX, "sft", "final_adapter")
-            if os.path.exists(_downloaded_path):
-                _model_path = _downloaded_path
-            else:
-                _model_path = _local_sft_path
-
-        print(f"[TEXT] Loading ORPO base model from SFT adapter: {_model_path}")
-        text_model, _tokenizer_unsloth = FastLanguageModel.from_pretrained(
-            model_name=_model_path,
-            max_seq_length=TEXT_MAX_SOURCE_LENGTH,
-            load_in_4bit=TEXT_LOAD_IN_4BIT,
-            trust_remote_code=True,
-            token=os.environ.get("HF_TOKEN"),
-        )
-    else:
-        # SFT: Load base model
-        print(f"\n[TEXT] Loading base model from {TEXT_MODEL_NAME} using Unsloth...")
-        text_model, _tokenizer_unsloth = FastLanguageModel.from_pretrained(
-            model_name=TEXT_MODEL_NAME,
-            max_seq_length=TEXT_MAX_SOURCE_LENGTH,
-            load_in_4bit=TEXT_LOAD_IN_4BIT,
-            trust_remote_code=True,
-            token=os.environ.get("HF_TOKEN"),
-        )
-
-    if text_model is not None:
-        # Reset max_length to silence warning
-        text_model.config.max_length = None
-        if hasattr(text_model, "generation_config") and text_model.generation_config is not None:
-            text_model.generation_config.max_length = None
-
-        if getattr(text_model.config, "decoder_start_token_id", None) is None:
-            text_model.config.decoder_start_token_id = text_tokenizer.bos_token_id
-            print(f"  Set decoder_start_token_id = {text_model.config.decoder_start_token_id}")
-
-        if text_tokenizer.pad_token is None:
-            text_tokenizer.add_special_tokens({"pad_token": text_tokenizer.eos_token})
-            text_model.resize_token_embeddings(len(text_tokenizer))
-
-        # Logit Masking
-        print(f"\n[TEXT] Applying logit mask for {len(ALL_SUPPRESS_IDS)} tokens...")
-        apply_logit_mask(text_model, ALL_SUPPRESS_IDS)
-
-        # LoRA Config
-        if hasattr(text_model, "peft_config"):
-            print("[TEXT] Model is already a PEFT model (loaded SFT adapter). Skipping get_peft_model.")
-        else:
-            print("[TEXT] Applying LoRA using Unsloth...")
-            text_model = FastLanguageModel.get_peft_model(
-                text_model,
-                r=TEXT_LORA_RANK,
-                lora_alpha=TEXT_LORA_ALPHA,
-                target_modules=TEXT_LORA_TARGET_MODULES,
-                lora_dropout=TEXT_LORA_DROPOUT,
-                bias="none",
-                use_gradient_checkpointing="unsloth",
-                random_state=3407,
-            )
-
-        getattr(FastLanguageModel, "for_training")(text_model)
-        text_model.config.use_cache = False
-
-        # Safety wrapper
-        if hasattr(text_model, "prepare_decoder_input_ids_from_labels"):
-            orig_fn = text_model.prepare_decoder_input_ids_from_labels
-            def compatible_prepare(labels=None, input_ids=None, *args, **kwargs):
-                target_tensor = labels if labels is not None else input_ids
-                return orig_fn(target_tensor, *args, **kwargs)
-            text_model.prepare_decoder_input_ids_from_labels = compatible_prepare
-
-        text_model.print_trainable_parameters()
-
-    return (text_model,)
-
-
-# =====================================================================
-# TEXT TRAINING CELL — Sequential SFT → ORPO
-# =====================================================================
-@app.cell
-def _(
-    ALL_SUPPRESS_IDS,
-    Any,
-    BF16,
-    DataCollatorForSeq2Seq,
-    F,
-    GrokAdEMAMix,
-    PreTrainedTokenizerFast,
-    SelectiveLabelSmoother,
-    Seq2SeqTrainer,
-    Seq2SeqTrainingArguments,
-    TEXT_EVAL_ACCUMULATION_STEPS,
-    TEXT_EVAL_EVERY_N_STEPS,
-    TEXT_FP16,
-    TEXT_GEN_REPETITION_PENALTY,
-    TEXT_GEN_TEMPERATURE,
-    TEXT_GEN_TOP_P,
-    TEXT_GRADIENT_ACCUMULATION_STEPS,
-    TEXT_GRADIENT_CHECKPOINTING,
-    TEXT_HF_CHECKPOINT_REPO,
-    TEXT_HF_PREFIX,
-    TEXT_LABEL_SMOOTHING_FACTOR,
-    TEXT_LEARNING_RATE,
-    TEXT_LOGGING_STEPS,
-    TEXT_LR_SCHEDULER_TYPE,
-    TEXT_MAX_TARGET_LENGTH,
-    TEXT_NEFTUNE_NOISE_ALPHA,
-    TEXT_NUM_EPOCHS_ORPO,
-    TEXT_NUM_EPOCHS_SFT,
-    TEXT_OPTIM,
-    TEXT_ORPO_BETA,
-    TEXT_OUTPUT_DIR,
-    TEXT_PER_DEVICE_EVAL_BATCH_SIZE,
-    TEXT_PER_DEVICE_TRAIN_BATCH_SIZE,
-    TEXT_PREDICT_WITH_GENERATE,
-    TEXT_SAVE_TOTAL_LIMIT,
-    TEXT_WARMUP_STEPS,
-    TEXT_WEIGHT_DECAY,
-    TextHubUploadCallback,
-    TextSampleGenerationCallback,
-    TextTrainingPlotCallback,
-    bertscore_metric,
-    bleu_metric,
-    cast,
-    exact_match_metric,
-    gc,
-    get_scheduler,
-    meteor_metric,
-    mo,
-    np,
-    os,
-    rouge_metric,
-    text_current_stage,
-    text_eval_ds,
-    text_eval_generation_samples,
-    text_is_orpo_training,
-    text_model,
-    text_resume_checkpoint,
-    text_tokenizer,
-    text_train_ds,
-    torch,
-):
-    # Skip jika sudah selesai atau tidak ada data
-    mo.stop(
-        text_current_stage == "done" or text_train_ds is None,
-        mo.md("✅ **[TEXT] Training sudah selesai atau tidak ada data training.** Lanjut ke merge & upload."),
-    )
-
-    # 1. Bersihkan sisa memori
-    gc.collect()
-    torch.cuda.empty_cache()
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
-    # Tentukan output dir berdasarkan stage
-    text_active_output_dir = os.path.join(TEXT_OUTPUT_DIR, text_current_stage)
-    os.makedirs(text_active_output_dir, exist_ok=True)
-
-    # === CUSTOM TRAINER ===
-    # NOTE: SelectiveLabelSmoother dipakai dari shared cell (identik dengan
-    # definisi inline di notebook text asli — dipindah agar bisa dipakai ulang
-    # oleh vision trainer tanpa duplikasi nama).
-    class TextCustomSeq2SeqTrainer(Seq2SeqTrainer):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.model_accepts_loss_kwargs = False
-            if self.args.label_smoothing_factor > 0:
-                self.label_smoother = SelectiveLabelSmoother(
-                    epsilon=self.args.label_smoothing_factor,
-                    suppress_ids=ALL_SUPPRESS_IDS,
-                )
-
-        def compute_loss(
-            self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs
-        ):
-            labels = inputs.get("labels")
-            outputs = model(**inputs)
-
-            if self.label_smoother is not None and labels is not None:
-                loss = self.label_smoother(outputs, labels)
-            else:
-                if isinstance(outputs, dict) and "logits" in outputs:
-                    logits = outputs["logits"]
-                elif isinstance(outputs, tuple):
-                    logits = outputs[1] if len(outputs) > 1 else outputs[0].logits
-                else:
-                    logits = outputs.logits
-                loss_fct = torch.nn.CrossEntropyLoss(
-                    ignore_index=-100, reduction="mean"
-                )
-                loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-
-            return (loss, outputs) if return_outputs else loss
-
-        def evaluate(
-            self,
-            eval_dataset=None,
-            ignore_keys=None,
-            metric_key_prefix="eval",
-            **gen_kwargs,
-        ):
-            from unsloth import FastLanguageModel
-            if hasattr(FastLanguageModel, "for_inference"):
-                FastLanguageModel.for_inference(self.model)
-            else:
-                self.model.eval()
-
-            metrics = super().evaluate(
-                eval_dataset=eval_dataset,
-                ignore_keys=ignore_keys,
-                metric_key_prefix=metric_key_prefix,
-                **gen_kwargs,
-            )
-
-            if hasattr(FastLanguageModel, "for_training"):
-                FastLanguageModel.for_training(self.model)
-            else:
-                self.model.train()
-
-            gc.collect()
-            torch.cuda.empty_cache()
-            return metrics
-
-        def log(self, logs, start_time=None):
-            if "eval_loss" in logs:
-                import math
-                try:
-                    logs["eval_perplexity"] = math.exp(logs["eval_loss"])
-                except OverflowError:
-                    logs["eval_perplexity"] = float("inf")
-            super().log(logs, start_time=start_time)
-
-    # === ORPO COLLATOR ===
-    class TextORPODataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
-        def __call__(self, features, return_tensors=None):
-            if not features or "chosen_labels" not in features[0]:
-                return super().__call__(features, return_tensors)
-
-            chosen_features = [{"input_ids": f["input_ids"], "labels": f["chosen_labels"]} for f in features]
-            rejected_features = [{"input_ids": f["input_ids"], "labels": f["rejected_labels"]} for f in features]
-
-            batch = super().__call__(chosen_features, return_tensors)
-            rejected_batch = super().__call__(rejected_features, return_tensors)
-
-            batch["chosen_labels"] = batch.pop("labels")
-            batch["rejected_labels"] = rejected_batch.pop("labels")
-            return batch
-
-    # === ORPO TRAINER ===
-    class TextCustomORPOTrainer(TextCustomSeq2SeqTrainer):
-        def __init__(self, beta=0.1, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.beta = beta
-
-        def get_batch_logps(self, logits, labels, average_log_prob: bool = True):
-            """Pakai average_log_prob=True untuk numerical stability (sesuai paper ORPO)."""
-            if logits.shape[:-1] != labels.shape:
-                raise ValueError("Logits and labels must have the same shape.")
-            labels = labels.clone()
-            loss_mask = labels != -100
-            labels[labels == -100] = 0
-            per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
-            if average_log_prob:
-                return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1)
-            else:
-                return (per_token_logps * loss_mask).sum(-1)
-
-        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
-            chosen_labels = inputs.pop("chosen_labels", None)
-            rejected_labels = inputs.pop("rejected_labels", None)
-
-            if chosen_labels is None or rejected_labels is None:
-                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch, **kwargs)
-
-            input_ids = inputs.get("input_ids")
-            attention_mask = inputs.get("attention_mask")
-
-            chosen_outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=chosen_labels)
-            chosen_logits = chosen_outputs.logits
-
-            rejected_outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=rejected_labels)
-            rejected_logits = rejected_outputs.logits
-
-            chosen_logps = self.get_batch_logps(chosen_logits, chosen_labels, average_log_prob=True)
-            rejected_logps = self.get_batch_logps(rejected_logits, rejected_labels, average_log_prob=True)
-
-            # Numerically stable log-odds (clamp exp to avoid 0 or 1)
-            chosen_probs = chosen_logps.exp().clamp(1e-7, 1 - 1e-7)
-            rejected_probs = rejected_logps.exp().clamp(1e-7, 1 - 1e-7)
-            chosen_log_odds = torch.log(chosen_probs / (1 - chosen_probs))
-            rejected_log_odds = torch.log(rejected_probs / (1 - rejected_probs))
-
-            log_odds_margin = chosen_log_odds - rejected_log_odds
-            or_loss = -F.logsigmoid(log_odds_margin).mean()
-
-            # SFT loss tanpa label smoothing untuk konsistensi skala
-            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="mean")
-            sft_loss = loss_fct(chosen_logits.view(-1, chosen_logits.size(-1)), chosen_labels.view(-1))
-
-            loss = sft_loss + self.beta * or_loss
-            return (loss, chosen_outputs) if return_outputs else loss
-
-    # === COMPUTE METRICS ===
-    def text_compute_metrics(eval_preds):
-        metrics = {}
-        if rouge_metric is None and bleu_metric is None:
-            return metrics
-        preds, labels = eval_preds
-        if isinstance(preds, tuple):
-            preds = preds[0]
-        tok = cast(PreTrainedTokenizerFast, text_tokenizer)
-
-        if preds.ndim == 3:
-            preds = preds.argmax(axis=-1)
-
-        labels = np.where(labels != -100, labels, tok.pad_token_id)
-        preds = np.where(preds != -100, preds, tok.pad_token_id)
-        decoded_preds = tok.batch_decode(preds, skip_special_tokens=True)
-        decoded_labels = tok.batch_decode(labels, skip_special_tokens=True)
-        decoded_preds = [pred.strip() for pred in decoded_preds]
-        decoded_labels = [label.strip() for label in decoded_labels]
-
-        if rouge_metric is not None:
-            try:
-                result = cast(Any, rouge_metric).compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=False)
-                if result is not None:
-                    for key, value in result.items():
-                        metrics[key] = value * 100
-            except Exception as e:
-                print(f"Error during ROUGE: {e}")
-
-        if bleu_metric is not None:
-            try:
-                formatted_labels = [[label] for label in decoded_labels]
-                bleu_result = cast(Any, bleu_metric).compute(predictions=decoded_preds, references=formatted_labels)
-                if bleu_result is not None and "bleu" in bleu_result:
-                    metrics["bleu"] = bleu_result["bleu"] * 100
-            except Exception as e:
-                print(f"Error during BLEU: {e}")
-
-        if exact_match_metric is not None:
-            try:
-                em_result = cast(Any, exact_match_metric).compute(predictions=decoded_preds, references=decoded_labels)
-                if em_result is not None and "exact_match" in em_result:
-                    metrics["exact_match"] = em_result["exact_match"] * 100
-            except Exception as e:
-                print(f"Error during Exact Match: {e}")
-
-        if bertscore_metric is not None:
-            try:
-                bertscore_result = cast(Any, bertscore_metric).compute(
-                    predictions=decoded_preds, references=decoded_labels,
-                    model_type="google/embeddinggemma-300m", num_layers=12, lang="id"
-                )
-                if bertscore_result is not None and "f1" in bertscore_result:
-                    metrics["bertscore_f1"] = np.mean(bertscore_result["f1"]) * 100
-            except Exception as e:
-                print(f"Error during BERTScore: {e}")
-
-        if meteor_metric is not None:
-            try:
-                meteor_result = cast(Any, meteor_metric).compute(predictions=decoded_preds, references=decoded_labels)
-                if meteor_result is not None and "meteor" in meteor_result:
-                    metrics["meteor"] = meteor_result["meteor"] * 100
-            except Exception as e:
-                print(f"Error during METEOR: {e}")
-
-        return metrics
-
-    def text_preprocess_logits_for_metrics(logits, labels):
-        if isinstance(logits, tuple):
-            logits = logits[0]
-        return logits.argmax(dim=-1)
-
-    # === BUILD TRAINER ===
-    bad_words_ids = [
-        [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, text_model).config.vocab_size
-    ]
-
-    _hf_token = os.environ.get("HF_TOKEN")
-
-    plot_callback = TextTrainingPlotCallback(output_dir=text_active_output_dir)
-    sample_callback = TextSampleGenerationCallback(
-        tokenizer=text_tokenizer,
-        eval_samples=text_eval_generation_samples,
-        output_dir=text_active_output_dir,
-        eval_every_n_steps=TEXT_EVAL_EVERY_N_STEPS,
-        temperature=TEXT_GEN_TEMPERATURE,
-        top_p=TEXT_GEN_TOP_P,
-        repetition_penalty=TEXT_GEN_REPETITION_PENALTY,
-        bad_words_ids=bad_words_ids,
-    )
-    hub_callback = TextHubUploadCallback(
-        repo_id=TEXT_HF_CHECKPOINT_REPO,
-        stage=f"{TEXT_HF_PREFIX}/{text_current_stage}",
-        token=_hf_token,
-        output_dir=text_active_output_dir,
-    )
-
-    if text_is_orpo_training:
-        data_collator = TextORPODataCollatorForSeq2Seq(tokenizer=text_tokenizer, model=text_model, padding=True)
-    else:
-        data_collator = DataCollatorForSeq2Seq(tokenizer=text_tokenizer, model=text_model, padding=True)
-
-    training_args = Seq2SeqTrainingArguments(
-        output_dir=text_active_output_dir,
-        per_device_train_batch_size=TEXT_PER_DEVICE_TRAIN_BATCH_SIZE,
-        per_device_eval_batch_size=TEXT_PER_DEVICE_EVAL_BATCH_SIZE,
-        gradient_accumulation_steps=TEXT_GRADIENT_ACCUMULATION_STEPS,
-        eval_accumulation_steps=TEXT_EVAL_ACCUMULATION_STEPS,
-        learning_rate=TEXT_LEARNING_RATE,
-        num_train_epochs=TEXT_NUM_EPOCHS_ORPO if text_is_orpo_training else TEXT_NUM_EPOCHS_SFT,
-        warmup_steps=TEXT_WARMUP_STEPS,
-        weight_decay=TEXT_WEIGHT_DECAY,
-        lr_scheduler_type=TEXT_LR_SCHEDULER_TYPE,
-        predict_with_generate=TEXT_PREDICT_WITH_GENERATE,
-        logging_steps=TEXT_LOGGING_STEPS,
-        save_strategy="steps",
-        save_steps=TEXT_EVAL_EVERY_N_STEPS,
-        save_total_limit=TEXT_SAVE_TOTAL_LIMIT,
-        eval_strategy="steps",
-        eval_steps=TEXT_EVAL_EVERY_N_STEPS,
-        optim=TEXT_OPTIM,
-        label_smoothing_factor=TEXT_LABEL_SMOOTHING_FACTOR if not text_is_orpo_training else 0.0,
-        neftune_noise_alpha=TEXT_NEFTUNE_NOISE_ALPHA,
-        report_to="none",
-        fp16=TEXT_FP16,
-        bf16=BF16,
-        gradient_checkpointing=TEXT_GRADIENT_CHECKPOINTING,
-        generation_max_length=TEXT_MAX_TARGET_LENGTH,
-        push_to_hub=False,  # Kita handle manual via HubUploadCallback
-        remove_unused_columns=False if text_is_orpo_training else True,
-    )
-
-    optimizer = GrokAdEMAMix(
-        text_model.parameters(),
-        lr=TEXT_LEARNING_RATE,
-        weight_decay=TEXT_WEIGHT_DECAY,
-        grok_alpha=2.0,
-        grok_lamb=0.98,
-    )
-
-    num_update_steps_per_epoch = max(
-        1, len(text_train_ds) // (TEXT_PER_DEVICE_TRAIN_BATCH_SIZE * TEXT_GRADIENT_ACCUMULATION_STEPS)
-    )
-    max_steps = num_update_steps_per_epoch * (TEXT_NUM_EPOCHS_ORPO if text_is_orpo_training else TEXT_NUM_EPOCHS_SFT)
-
-    lr_scheduler = get_scheduler(
-        name=TEXT_LR_SCHEDULER_TYPE,
-        optimizer=optimizer,
-        num_warmup_steps=TEXT_WARMUP_STEPS,
-        num_training_steps=max_steps,
-    )
-
-    trainer_class = TextCustomORPOTrainer if text_is_orpo_training else TextCustomSeq2SeqTrainer
-    trainer_kwargs = {
-        "model": text_model,
-        "args": training_args,
-        "train_dataset": cast(Any, text_train_ds),
-        "eval_dataset": cast(Any, text_eval_ds),
-        "data_collator": data_collator,
-        "compute_metrics": text_compute_metrics,
-        "preprocess_logits_for_metrics": None if TEXT_PREDICT_WITH_GENERATE else text_preprocess_logits_for_metrics,
-        "optimizers": (optimizer, lr_scheduler),
-        "callbacks": [plot_callback, sample_callback, hub_callback],
-    }
-    if text_is_orpo_training:
-        trainer_kwargs["beta"] = TEXT_ORPO_BETA
-
-    text_trainer = trainer_class(**trainer_kwargs)
-
-    # === RESUME FROM HF CHECKPOINT ===
-    _resume_from = None
-    if text_resume_checkpoint:
-        try:
-            from huggingface_hub import snapshot_download as _resume_snap
-            from huggingface_hub import HfApi as _ResumeApi
-
-            _api = _ResumeApi(token=_hf_token)
-            _files = _api.list_repo_files(repo_id=TEXT_HF_CHECKPOINT_REPO)
-
-            # Cari checkpoint terbaru biar gak download semuanya dan bikin storage penuh
-            _ckpt_prefix = f"{TEXT_HF_PREFIX}/{text_current_stage}/checkpoint-"
-            _ckpts = list(set([f.split('/')[2] for f in _files if f.startswith(_ckpt_prefix)]))
-            if _ckpts:
-                _ckpts.sort(key=lambda x: int(x.split('-')[1]))
-                _latest_ckpt = _ckpts[-1]
-            else:
-                _latest_ckpt = "checkpoint-*"
-
-            print(f"\n📥 [TEXT] Downloading {_latest_ckpt} ({text_current_stage}) dari HF untuk resume...")
-            _resume_snap(
-                repo_id=TEXT_HF_CHECKPOINT_REPO,
-                local_dir=text_active_output_dir,
-                allow_patterns=[f"{TEXT_HF_PREFIX}/{text_current_stage}/{_latest_ckpt}/**"],
-                token=_hf_token,
-            )
-            # Pindahkan dari subfolder ke root output dir jika perlu
-            _sub_dir = os.path.join(text_active_output_dir, TEXT_HF_PREFIX, text_current_stage)
-            if os.path.exists(_sub_dir):
-                import shutil as _shutil_text
-                for _item in os.listdir(_sub_dir):
-                    _src = os.path.join(_sub_dir, _item)
-                    _dst = os.path.join(text_active_output_dir, _item)
-                    if os.path.isdir(_src) and _item.startswith("checkpoint-"):
-                        if os.path.exists(_dst):
-                            _shutil_text.rmtree(_dst)
-                        _shutil_text.move(_src, _dst)
-                _shutil_text.rmtree(os.path.join(text_active_output_dir, TEXT_HF_PREFIX))
-
-            _checkpoints = sorted([
-                d for d in os.listdir(text_active_output_dir)
-                if d.startswith("checkpoint-") and os.path.isdir(os.path.join(text_active_output_dir, d))
-            ])
-            if _checkpoints:
-                _resume_from = True
-                print(f"✅ [TEXT] Ditemukan {len(_checkpoints)} checkpoint(s). Resume dari yang terbaru!")
-            else:
-                print("⚠️ [TEXT] Tidak ada checkpoint valid ditemukan. Mulai dari awal.")
-        except Exception as e:
-            print(f"⚠️ [TEXT] Gagal download checkpoint: {e}. Mulai dari awal.")
-
-    # === START TRAINING ===
-    print(f"\n🚀 [TEXT] Starting {text_current_stage.upper()} training...")
-    text_trainer.train(resume_from_checkpoint=_resume_from)
-
-    # === SAVE FINAL ADAPTER + UPLOAD ===
-    _final_path = os.path.join(text_active_output_dir, "final_adapter")
-    print(f"\n💾 [TEXT] Saving final adapter to {_final_path}...")
-    text_trainer.save_model(_final_path)
-    text_tokenizer.save_pretrained(_final_path)
-
-    # Upload final adapter ke HF
-    try:
-        from huggingface_hub import HfApi as _FinalApi
-        _final_api = _FinalApi(token=_hf_token)
-        print(f"📤 [TEXT] Uploading final adapter to HF {TEXT_HF_PREFIX}/{text_current_stage}/final_adapter/...")
-        _final_api.upload_folder(
-            folder_path=_final_path,
-            path_in_repo=f"{TEXT_HF_PREFIX}/{text_current_stage}/final_adapter",
-            repo_id=TEXT_HF_CHECKPOINT_REPO,
-        )
-        # Upload final chart dan log juga
-        for _art in ["training_chart.png", "eval_samples.txt"]:
-            _art_path = os.path.join(text_active_output_dir, _art)
-            if os.path.exists(_art_path):
-                _final_api.upload_file(
-                    path_or_fileobj=_art_path,
-                    path_in_repo=f"{TEXT_HF_PREFIX}/{text_current_stage}/{_art}",
-                    repo_id=TEXT_HF_CHECKPOINT_REPO,
-                )
-        print(f"✅ [TEXT] {text_current_stage.upper()} training selesai dan ter-upload!")
-    except Exception as e:
-        print(f"⚠️ [TEXT] Upload final adapter gagal: {e}")
-
-    return (text_trainer,)
-
-
-# =====================================================================
-# TEXT: MERGE & QUANTIZE
-# =====================================================================
-@app.cell
-def _(
-    TEXT_HF_CHECKPOINT_REPO,
-    TEXT_HF_PREFIX,
-    TEXT_LOAD_IN_4BIT,
-    TEXT_MAX_SOURCE_LENGTH,
-    TEXT_OUTPUT_DIR,
-    mo,
-    os,
-    text_current_stage,
-    text_model,
-    text_tokenizer,
-):
-    mo.stop(
-        text_current_stage != "done" and text_model is None,
-        mo.md("⏭️ **[TEXT] Phase 1 belum selesai (SFT/ORPO masih berjalan).** Merge dilewati — re-run notebook setelah ORPO selesai."),
-    )
-
-    def text_merge_and_quantize(text_model, text_tokenizer, upload_dir: str):
-        if text_model is None:
-            from unsloth import FastLanguageModel
-            # Load model dari adapter ORPO final
-            _orpo_path = os.path.join(TEXT_OUTPUT_DIR, "orpo", "final_adapter")
-            if not os.path.exists(_orpo_path):
-                # Fallback download dari HF
-                from huggingface_hub import snapshot_download as _snap_dl
-                print("📥 [TEXT] Downloading final ORPO adapter dari HF untuk merging...")
-                _snap_dl(
-                    repo_id=TEXT_HF_CHECKPOINT_REPO,
-                    local_dir=_orpo_path,
-                    allow_patterns=[f"{TEXT_HF_PREFIX}/orpo/final_adapter/**"],
-                    token=os.environ.get("HF_TOKEN"),
-                )
-                _sub_path = os.path.join(_orpo_path, TEXT_HF_PREFIX, "orpo", "final_adapter")
-                if os.path.exists(_sub_path):
-                    _orpo_path = _sub_path
-
-            print(f"📂 [TEXT] Loading model dari ORPO adapter untuk merge: {_orpo_path}")
-            text_model, _ = FastLanguageModel.from_pretrained(
-                model_name=_orpo_path,
-                max_seq_length=TEXT_MAX_SOURCE_LENGTH,
-                load_in_4bit=TEXT_LOAD_IN_4BIT,
-                trust_remote_code=True,
-            )
-
-        merged_bf16_path = os.path.join(upload_dir, "merged_bf16")
-        quantized_4bit_path = os.path.join(upload_dir, "quantized_4bit")
-
-        print("[TEXT] Merging LoRA adapter and saving model as BF16 using Unsloth...")
-        text_model.save_pretrained_merged(merged_bf16_path, text_tokenizer, save_method="merged_16bit")
-        print("✅ [TEXT] Model BF16 berhasil disimpan.")
-
-        print("\n[TEXT] Merging LoRA adapter and saving model as 4-bit NF4 using Unsloth...")
-        text_model.save_pretrained_merged(quantized_4bit_path, text_tokenizer, save_method="merged_4bit_forced")
-        print("✅ [TEXT] Model 4-bit NF4 berhasil disimpan!")
-
-        return None
-
-    text_upload_dir = os.path.join(TEXT_OUTPUT_DIR, "hf_upload")
-
-    text_merge_and_quantize(text_model, text_tokenizer, text_upload_dir)
-    return text_merge_and_quantize, text_upload_dir
-
-
-@app.cell
-def _(TEXT_HF_CHECKPOINT_REPO, TEXT_HF_PREFIX, os, text_upload_dir):
-    from huggingface_hub import HfApi as _UploadMergedApi
-
-    print(f"[TEXT] Memulai proses unggah model merged ke HF Hub: {TEXT_HF_CHECKPOINT_REPO}/{TEXT_HF_PREFIX}...")
-    text_merged_uploaded = False
-    try:
-        _merged_api = _UploadMergedApi(token=os.environ.get("HF_TOKEN"))
-
-        _merged_api.create_repo(repo_id=TEXT_HF_CHECKPOINT_REPO, repo_type="model", private=False, exist_ok=True)
-        _merged_api.upload_folder(
-            folder_path=text_upload_dir,
-            path_in_repo=TEXT_HF_PREFIX,
-            repo_id=TEXT_HF_CHECKPOINT_REPO,
-            repo_type="model",
-        )
-        text_merged_uploaded = True
-
-        print("✅ [TEXT] Berhasil mengunggah merged models ke Hugging Face Hub!")
-    except Exception as e:
-        print(f"❌ [TEXT] Terjadi kesalahan saat mengunggah: {e}")
-    return (text_merged_uploaded,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### 💻 [TEXT] Local Deployment & Inference (Unified Repo, Subfolder `text/`)
-    Setelah model TEXT diunggah ke **unified repo**, struktur artifacts TEXT berada di bawah prefix `text/`:
-    - `text/sft/` — Checkpoint dan artifacts SFT training
-    - `text/orpo/` — Checkpoint dan artifacts ORPO training
-    - `text/merged_bf16/` — Model gabungan utuh (bfloat16, ~15 GB) — **input untuk Phase 1.5 CANGKOK**
-    - `text/quantized_4bit/` — Model terkuantisasi (NF4, ~5 GB)
-
-    #### Load Model Quantized 4-bit:
-    ```python
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-    model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v6-combined-unsloth"
-
-    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="text/quantized_4bit")
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_id, subfolder="text/quantized_4bit", device_map="auto"
-    )
-    ```
-
-    #### Load Model Full Precision (BF16):
-    ```python
-    import torch
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-    model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v6-combined-unsloth"
-
-    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="text/merged_bf16")
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_id, subfolder="text/merged_bf16",
-        torch_dtype=torch.bfloat16, device_map="auto"
-    )
-    ```
-    """)
-    return
-
-
-# =====================================================================
-# TEXT: VISUALISASI HASIL EVALUASI
-# =====================================================================
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md("""
-    ## 📊 [TEXT] Visualisasi Hasil Evaluasi Kualitatif
-    """)
-    return
-
-
-@app.cell
-def _(TEXT_OUTPUT_DIR, mo, os, re, text_current_stage):
-    # Path ke file log hasil evaluasi — sesuai stage aktif
-    _active_dir = os.path.join(TEXT_OUTPUT_DIR, text_current_stage) if text_current_stage != "done" else os.path.join(TEXT_OUTPUT_DIR, "orpo")
-    text_log_file_path = os.path.join(_active_dir, "eval_samples.txt")
-
-    def text_parse_log_file(filepath):
-        if not os.path.exists(filepath):
-            return []
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        blocks = re.split(r"={10,}", content)
-        steps_data = []
-
-        i = 1
-        while i < len(blocks):
-            header = blocks[i].strip()
-            step_match = re.search(r"Step\s+(\d+)\s*\|\s*([\d\-\s:]+)", header)
-            if not step_match:
-                i += 1
-                continue
-
-            step_num = step_match.group(1)
-            timestamp = step_match.group(2)
-            label = f"Step {step_num} ({timestamp})"
-
-            body = blocks[i + 1].strip() if i + 1 < len(blocks) else ""
-
-            samples = []
-            raw_samples = re.split(r"\n+Q:\s*", "\n" + body)
-            for rs in raw_samples:
-                rs = rs.strip()
-                if not rs or not ("Expected Target:" in rs and "Model Response:" in rs):
-                    continue
-
-                try:
-                    q_part, rest = rs.split("Expected Target:", 1)
-                    target_part, response_part = rest.split("Model Response:", 1)
-
-                    query = q_part.strip()
-                    target = target_part.strip()
-                    response = response_part.strip()
-
-                    flag_text = "Good ✅"
-                    flag_class = "badge-good"
-                    if "⚠️ REPETITIVE" in response:
-                        response = response.replace("⚠️ REPETITIVE", "").strip()
-                        flag_text = "Repetitive ⚠️"
-                        flag_class = "badge-rep"
-                    elif response.endswith(" ✅"):
-                        response = response[:-2].strip()
-
-                    samples.append(
-                        {
-                            "query": query,
-                            "target": target,
-                            "response": response,
-                            "flag": flag_text,
-                            "flag_class": flag_class,
-                        }
-                    )
-                except Exception:
-                    continue
-
-            if samples:
-                steps_data.append({"label": label, "samples": samples})
-            i += 2
-
-        return steps_data[::-1]
-
-    text_refresh_button = mo.ui.button(label="🔄 Refresh Data Evaluasi (TEXT)", value=0)
-
-    text_css_style = mo.Html("""
-    <style>
-    .sample-container {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        margin-top: 12px;
-    }
-    .sample-card {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
-    .sample-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-        border-color: rgba(255, 255, 255, 0.15);
-    }
-    .sample-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        padding-bottom: 8px;
-    }
-    .sample-num {
-        font-weight: 700;
-        font-size: 1.05em;
-        color: #4A90D9;
-    }
-    .sample-badge {
-        padding: 4px 8px;
-        border-radius: 6px;
-        font-size: 0.8em;
-        font-weight: 600;
-    }
-    .badge-good {
-        background-color: rgba(46, 204, 113, 0.15);
-        color: #2ECC71;
-        border: 1px solid rgba(46, 204, 113, 0.3);
-    }
-    .badge-rep {
-        background-color: rgba(231, 76, 60, 0.15);
-        color: #E74C3C;
-        border: 1px solid rgba(231, 76, 60, 0.3);
-    }
-    .section-title {
-        font-size: 0.85em;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #888;
-        margin-top: 10px;
-        margin-bottom: 4px;
-        font-weight: 600;
-    }
-    .text-block {
-        padding: 12px;
-        border-radius: 6px;
-        background: rgba(255, 255, 255, 0.01);
-        border: 1px solid rgba(255, 255, 255, 0.04);
-        font-size: 0.95em;
-        line-height: 1.5;
-        white-space: pre-wrap;
-    }
-    .prompt-block {
-        font-family: 'Fira Code', Consolas, monospace;
-        font-size: 0.85em;
-        color: #ddd;
-        background: rgba(0, 0, 0, 0.2);
-    }
-    .target-block {
-        border-left: 3px solid #9B59B6;
-    }
-    .response-block {
-        border-left: 3px solid #2ECC71;
-    }
-    </style>
-    """)
-    return text_css_style, text_log_file_path, text_parse_log_file, text_refresh_button
-
-
-@app.cell
-def _(mo, text_log_file_path, text_parse_log_file, text_refresh_button):
-    _ = text_refresh_button.value
-
-    text_evaluation_runs = text_parse_log_file(text_log_file_path)
-
-    if not text_evaluation_runs:
-        text_step_dropdown = None
-    else:
-        run_options = {run["label"]: idx for idx, run in enumerate(text_evaluation_runs)}
-        text_step_dropdown = mo.ui.dropdown(
-            options=run_options,
-            value=next(iter(run_options)),
-            label="Pilih Step Evaluasi (TEXT):",
-            full_width=True,
-        )
-    return text_evaluation_runs, text_step_dropdown
-
-
-@app.cell
-def _(mo, text_css_style, text_evaluation_runs, text_log_file_path, text_refresh_button, text_step_dropdown):
-    if not text_evaluation_runs or text_step_dropdown is None:
-        _output = mo.md(
-            f"⚠️ *Belum ada data evaluasi TEXT ditemukan di `{text_log_file_path}`. Silakan jalankan training terlebih dahulu.*"
-        )
-    else:
-        _selected_idx = text_step_dropdown.value
-        _selected_run = text_evaluation_runs[_selected_idx]
-
-        _cards_html = []
-        for _idx, _s in enumerate(_selected_run["samples"]):
-            _card = f"""
-            <div class="sample-card">
-                <div class="sample-header">
-                    <span class="sample-num">Sampel #{_idx + 1}</span>
-                    <span class="sample-badge {_s["flag_class"]}">{_s["flag"]}</span>
-                </div>
-                <div class="sample-body">
-                    <div class="section-title">💬 User Prompt</div>
-                    <pre class="text-block prompt-block">{_s["query"]}</pre>
-
-                    <div class="section-title">🎯 Expected Target</div>
-                    <div class="text-block target-block">{_s["target"]}</div>
-
-                    <div class="section-title">🤖 Model Response</div>
-                    <div class="text-block response-block">{_s["response"]}</div>
-                </div>
-            </div>
-            """
-            _cards_html.append(_card)
-
-        _container_html = f"""
-        {text_css_style.text}
-        <div class="sample-container">
-            {"".join(_cards_html)}
-        </div>
-        """
-
-        _output = mo.vstack(
-            [
-                mo.md(
-                    f"Menampilkan **{len(_selected_run['samples'])} sampel** untuk **{_selected_run['label']}**."
-                ),
-                text_step_dropdown,
-                mo.Html(_container_html),
-            ]
-        )
-
-    mo.vstack([text_refresh_button, mo.hstack([_output], justify="start")])
-    return
-
-
-# #####################################################################
-# #####################################################################
-#
-#   ██████╗ ██╗  ██╗ █████╗ ███████╗███████╗     ██╗ ███████╗
-#   ██╔══██╗██║  ██║██╔══██╗██╔════╝██╔════╝    ███║ ╚════██║
-#   ██████╔╝███████║███████║███████╗█████╗      ╚██║     ██╔╝
-#   ██╔═══╝ ██╔══██║██╔══██║╚════██║██╔══╝       ██║    ██╔╝
-#   ██║     ██║  ██║██║  ██║███████║███████╗     ██║██╗██║
-#   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝     ╚═╝╚═╝╚═╝
-#
-#   CANGKOK: SigLIP vision_tower + multi_modal_projector Gemma 3 4B IT
-#            --> text/merged_bf16 hasil Phase 1
-#   Output : UNIFIED_HF_REPO subfolder cangkok/
-#
-# #####################################################################
-# #####################################################################
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ---
-    # 🌱 PHASE 1.5 — CANGKOK Vision Tower Gemma 3 IT → T5Gemma-2
-    =====================================================================
-    **Trace mekanisme cangkok** (yang dulunya menciptakan repo `...-vision-cangkok`):
-
-    | Langkah | Sumber asli | Yang dikerjakan |
-    |---|---|---|
-    | 1 | `scripts/tests/verify_vision_weights_3way.py` (cell **CANGKOK**) | Load **target** = `v4-unsloth/merged_bf16` (hasil Phase 1) & **source** = `google/gemma-3-4b-it` |
-    | 2 | ibid. | Ekstrak params source yang mengandung `vision_tower` / `multi_modal_projector`, normalisasi prefix `model.` |
-    | 3 | ibid. | Iterasi params target, normalisasi prefix `model.encoder.`/`encoder.`, `param.data.copy_()` dari source jika **shape cocok** |
-    | 4 | ibid. | Verifikasi: diff target-vs-source harus `< 1e-6` untuk semua param yang dicangkok |
-    | 5 | ibid. | `save_pretrained` lokal + upload ke HF **+ processor dari `google/t5gemma-2-4b-4b`** |
-    | 6 | `scripts/tests/patch_cangkok_tokenizer.py` | Replace `tokenizer_config.json` dengan versi `merged_bf16` (lengkap: `added_tokens_decoder` + `task_prefix_mapping`) |
-
-    Di pipeline gabungan ini, mekanisme yang **persis sama** dijalankan otomatis, hanya path-nya
-    dipindah ke unified repo: target = `text/merged_bf16`, output = subfolder **`cangkok/`**.
-
-    > Kenapa cuma SigLIP + projector yang dicangkok, bukan decoder?
-    > Analogi dari `docs/VISION_TRAINING_ANALYSIS_AND_CANGKOK_STRATEGY.md`: transplantasi decoder =
-    > memindahkan otak yang dilatih untuk "bahasa A" ke tubuh "bahasa B" (mismatch — pernah dicoba, hancur).
-    > SigLIP = mata; "melihat" tidak peduli bahasa apa yang dipakai otak. Hidden size vision tower
-    > T5Gemma-2 dan Gemma 3 4B identik (sama-sama SigLIP 400M), jadi cangkok shape-nya selalu cocok.
-    """)
-    return
-
-
-# =====================================================================
-# CANGKOK: KONFIGURASI
-# =====================================================================
-@app.cell
-def _(UNIFIED_HF_REPO):
-    CANGKOK_HF_REPO = UNIFIED_HF_REPO     # 1 repo unified
-    CANGKOK_HF_PREFIX = "cangkok"         # subfolder tujuan di unified repo
-    CANGKOK_TEXT_SUBFOLDER = "text/merged_bf16"  # sumber target graft dari Phase 1
-    CANGKOK_GEMMA3_IT = "google/gemma-3-4b-it"   # donor SigLIP + projector
-    CANGKOK_ORIG_T5GEMMA2 = "google/t5gemma-2-4b-4b"  # donor processor (full preprocessor_config)
-    CANGKOK_FORCE = False                 # True = graft ulang walau cangkok/ sudah ada
-    return (
-        CANGKOK_FORCE,
-        CANGKOK_GEMMA3_IT,
-        CANGKOK_HF_PREFIX,
-        CANGKOK_HF_REPO,
-        CANGKOK_ORIG_T5GEMMA2,
-        CANGKOK_TEXT_SUBFOLDER,
-    )
-
-
-# =====================================================================
-# CANGKOK: EKSEKUSI GRAFT + UPLOAD + TOKENIZER PATCH
+# FRESH PIPELINE STATE DETECTION (single source of truth saat start)
 # =====================================================================
 @app.cell
 def _(
     CANGKOK_FORCE,
-    CANGKOK_GEMMA3_IT,
-    CANGKOK_HF_PREFIX,
-    CANGKOK_HF_REPO,
-    CANGKOK_ORIG_T5GEMMA2,
-    CANGKOK_TEXT_SUBFOLDER,
-    TEXT_HF_PREFIX,
+    CANGKOK_SUBFOLDER,
+    ENABLE_STEERING,
+    FINAL_PREFIX,
+    JOINT_PREFIX,
+    STEERED_SUBFOLDER,
+    STEERING_FORCE,
+    UNIFIED_HF_REPO,
+    mo,
+    os,
+):
+    from huggingface_hub import HfApi as _StageApi
+
+    _token = os.environ.get("HF_TOKEN")
+    _api = _StageApi(token=_token)
+    _api.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
+    _files = _api.list_repo_files(UNIFIED_HF_REPO)
+
+    def _has(path_prefix: str, suffix: str = "config.json") -> bool:
+        return any(f.startswith(path_prefix) and f.endswith(suffix) for f in _files)
+
+    def _has_ckpt(path_prefix: str) -> bool:
+        return any(
+            f.startswith(f"{path_prefix}/checkpoint-") and "/" in f[len(f"{path_prefix}/checkpoint-"):]
+            for f in _files
+        )
+
+    pipeline_stage = "steering"
+    sft_resume = _has_ckpt(f"{JOINT_PREFIX}/sft")
+    orpo_resume = _has_ckpt(f"{JOINT_PREFIX}/orpo")
+
+    # NOTE: *_FORCE hanya mengabaikan keberadaan artifact fase TERKAIT
+    # (tidak bisa memutar balik fase yang sudah lebih jauh).
+    if _has(f"{FINAL_PREFIX}/merged_bf16/"):
+        pipeline_stage = "done"
+    elif _has(f"{JOINT_PREFIX}/orpo/final_adapter/"):
+        pipeline_stage = "merge"
+    elif _has(f"{JOINT_PREFIX}/sft/final_adapter/"):
+        pipeline_stage = "orpo"
+    elif _has(f"{CANGKOK_SUBFOLDER}/") and not CANGKOK_FORCE:
+        pipeline_stage = "sft"
+    elif (_has(f"{STEERED_SUBFOLDER}/") and not STEERING_FORCE) or not ENABLE_STEERING:
+        pipeline_stage = "cangkok"
+
+    _labels = {
+        "steering": "Phase 0.5 (Task Vector Steering)",
+        "cangkok": "Phase 1.5 (Vision Grafting)",
+        "sft": "Phase 1 (JOINT SFT)",
+        "orpo": "Phase 2 (JOINT ORPO)",
+        "merge": "Final Merge",
+        "done": "✅ SEMUA SELESAI",
+    }
+    print(f"📍 Pipeline stage: {_labels[pipeline_stage]}  (sft_resume={sft_resume}, orpo_resume={orpo_resume})")
+    mo.md(
+        f"**📍 Stage: `{pipeline_stage}`** ({_labels[pipeline_stage]}) | "
+        f"SFT resume: `{sft_resume}` | ORPO resume: `{orpo_resume}`"
+    )
+    return orpo_resume, pipeline_stage, sft_resume
+
+
+# #####################################################################
+#   PHASE 0.5 — 3-WAY TASK VECTOR STEERING (decoder only!)
+# #####################################################################
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ---
+    # 🧭 Phase 0.5 — 3-Way Task Vector Steering
+    Menyuntikkan *vektor kemahiran instruksi* `Δ = W_Gemma3-IT − W_Gemma3-Base`
+    ke **DECODER** T5Gemma-2 (encoder & vision tower TIDAK disentuh — mereka
+    menjaga pre-training UL2 & SigLIP).
+
+    **Merged-attention-aware α** (semua bisa di-tweak di CONTROL CENTER):
+
+    | Modul | α | Alasan |
+    |---|---|---|
+    | FFN (`gate/up/down_proj`) | α_FFN (default 0.8) | Token-wise murni — aman penuh |
+    | `q_proj`, `o_proj` | α_QO (0.3) | Q hanya melihat decoder X; moderat |
+    | **`k_proj`, `v_proj`** | α_KV (0.0) | Proyeksi joint **[X;H]** — Gemma-IT tak pernah melihat H; default SKIP |
+    | `q_norm`, `k_norm` | α_QKNORM (0.0) | Terikat kalibrasi joint softmax |
+    | RMSNorm layer | α_NORM (0.3) | 1D scale — aman |
+    | embed / lm_head | — | vocab beda (262144 vs 262208) → auto-skip shape-guard |
+
+    > ⚠️ Berbeda dengan skrip riset awal (yang key-mapping-nya keliru sehingga attention
+    > tak pernah tersuntik), implementasi ini memakai **tabel mapping eksplisit**
+    > yang diverifikasi dari arsitektur asli (`scripts/tests/results/t5gemma2_modules_dump.txt`).
+    """)
+    return
+
+
+@app.cell
+def _(
+    BASE_T5_MODEL,
+    ENABLE_STEERING,
+    GEMMA_BASE_MODEL,
+    GEMMA_IT_MODEL,
+    STEERED_SUBFOLDER,
+    STEERING_ALPHA_FFN,
+    STEERING_ALPHA_KV,
+    STEERING_ALPHA_NORM,
+    STEERING_ALPHA_QKNORM,
+    STEERING_ALPHA_QO,
+    STEERING_FORCE,
+    STEERING_SMOKE_TEST,
+    UNIFIED_HF_REPO,
+    format_encoder_from_raw,
     gc,
     mo,
     os,
-    text_merged_uploaded,
+    pipeline_stage,
     torch,
 ):
-    from huggingface_hub import HfApi as _CangkokApi
-    from huggingface_hub import create_repo as _create_repo
-    from transformers import (
-        AutoModelForSeq2SeqLM as _AutoSeq2Seq,
-        AutoModelForCausalLM as _AutoCausal,
-        AutoProcessor as _AutoProc,
-    )
+    from huggingface_hub import HfApi as _SteerApi
 
     _token = os.environ.get("HF_TOKEN")
-    _api = _CangkokApi(token=_token)
-    _create_repo(repo_id=CANGKOK_HF_REPO, repo_type="model", private=False, exist_ok=True, token=_token)
-    _repo_files = _api.list_repo_files(CANGKOK_HF_REPO)
-
-    # ---- GATE 1: sudah pernah dicangkok? ----
+    _api = _SteerApi(token=_token)
+    _files = _api.list_repo_files(UNIFIED_HF_REPO)
     _already = any(
-        f.startswith(f"{CANGKOK_HF_PREFIX}/") and f.endswith("config.json")
-        for f in _repo_files
+        f.startswith(f"{STEERED_SUBFOLDER}/") and f.endswith("config.json") for f in _files
     )
-    if _already and not CANGKOK_FORCE:
-        print(f"✅ [CANGKOK] Subfolder '{CANGKOK_HF_PREFIX}/' sudah ada di {CANGKOK_HF_REPO}.")
-        print("    Skip graft (set CANGKOK_FORCE=True untuk graft ulang).")
-        cangkok_ready = True
-    else:
-        # ---- GATE 2: prasyarat text/merged_bf16 harus ada ----
-        _text_merged_ok = any(
-            f.startswith(f"{TEXT_HF_PREFIX}/merged_bf16/") and f.endswith("config.json")
-            for f in _repo_files
+
+    # Skip kondisional (BUKAN mo.stop) agar flag steered_ready selalu ter-return
+    # dan cell downstream (cangkok) tidak ikut terblokir saat steering di-skip.
+    _should_run = (
+        ENABLE_STEERING
+        and pipeline_stage == "steering"
+        and (STEERING_FORCE or not _already)
+    )
+    if _should_run:
+
+        print("=" * 90)
+        print("  [STEER] 3-Way Task Vector Delta Steering (decoder T5Gemma-2)")
+        print("=" * 90)
+        print(f"  α_FFN={STEERING_ALPHA_FFN} | α_QO={STEERING_ALPHA_QO} | α_KV={STEERING_ALPHA_KV} "
+              f"| α_QKNORM={STEERING_ALPHA_QKNORM} | α_NORM={STEERING_ALPHA_NORM}")
+
+        # ---- 1. Load 3 model di CPU (aman memori; one-time operation) ----
+        from transformers import AutoModelForSeq2SeqLM as _SteerSeq2Seq
+        from transformers import AutoModelForCausalLM as _SteerCausal
+
+        gc.collect()
+        print(f"\n[1/3] Loading Base T5Gemma-2: {BASE_T5_MODEL} (CPU)...")
+        _t5 = _SteerSeq2Seq.from_pretrained(
+            BASE_T5_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
         )
-        mo.stop(
-            not _text_merged_ok,
-            mo.md(
-                "⏭️ **[CANGKOK] `text/merged_bf16` belum ada di unified repo.** "
-                "Selesaikan Phase 1 (SFT → ORPO → merge) dulu, lalu re-run notebook."
+        print(f"[2/3] Loading Gemma 3 Base: {GEMMA_BASE_MODEL} (CPU)...")
+        _g_base = _SteerCausal.from_pretrained(
+            GEMMA_BASE_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
+        )
+        print(f"[3/3] Loading Gemma 3 IT: {GEMMA_IT_MODEL} (CPU)...")
+        _g_it = _SteerCausal.from_pretrained(
+            GEMMA_IT_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
+        )
+
+        _t5_sd = _t5.state_dict()
+        _gb_sd = _g_base.state_dict()
+        _gi_sd = _g_it.state_dict()
+
+        _t5_layers = _t5.config.decoder.num_hidden_layers
+        _g_layers = _g_it.config.num_hidden_layers
+        _L = min(_t5_layers, _g_layers)
+        print(f"\n  Decoder layers: T5Gemma={_t5_layers}, Gemma3={_g_layers} → steer {_L} layers pertama")
+
+        # ---- 2. Steering dengan mapping eksplisit + shape guard ----
+        _counts = {}
+        _mismatch = []
+
+        def _steer(g_key, t_key, alpha, cat):
+            if alpha == 0:
+                return
+            if g_key in _gi_sd and g_key in _gb_sd and t_key in _t5_sd:
+                if _t5_sd[t_key].shape == _gi_sd[g_key].shape == _gb_sd[g_key].shape:
+                    _t5_sd[t_key] += alpha * (_gi_sd[g_key] - _gb_sd[g_key])
+                    _counts[cat] = _counts.get(cat, 0) + 1
+                else:
+                    _mismatch.append(
+                        f"{t_key}: t5{tuple(_t5_sd[t_key].shape)} vs gemma{tuple(_gi_sd[g_key].shape)}"
+                    )
+            else:
+                _mismatch.append(f"missing key: {g_key} / {t_key}")
+
+        for _l in range(_L):
+            # FFN — aman penuh
+            for _proj in ("gate_proj", "up_proj", "down_proj"):
+                _steer(f"model.layers.{_l}.mlp.{_proj}.weight",
+                       f"model.decoder.layers.{_l}.mlp.{_proj}.weight",
+                       STEERING_ALPHA_FFN, "ffn")
+            # Attention projections
+            for _proj, _a in (
+                ("q_proj", STEERING_ALPHA_QO),
+                ("o_proj", STEERING_ALPHA_QO),
+                ("k_proj", STEERING_ALPHA_KV),
+                ("v_proj", STEERING_ALPHA_KV),
+            ):
+                _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
+                       f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
+                       _a, f"attn.{_proj}")
+            # q_norm / k_norm
+            for _proj in ("q_norm", "k_norm"):
+                _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
+                       f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
+                       STEERING_ALPHA_QKNORM, f"attn.{_proj}")
+            # RMSNorms (Gemma input_layernorm→T5 pre_self_attn, post_attention→post_self_attn)
+            for _g_suf, _t_suf in (
+                ("input_layernorm", "pre_self_attn_layernorm"),
+                ("post_attention_layernorm", "post_self_attn_layernorm"),
+                ("pre_feedforward_layernorm", "pre_feedforward_layernorm"),
+                ("post_feedforward_layernorm", "post_feedforward_layernorm"),
+            ):
+                _steer(f"model.layers.{_l}.{_g_suf}.weight",
+                       f"model.decoder.layers.{_l}.{_t_suf}.weight",
+                       STEERING_ALPHA_NORM, "layernorm")
+
+        # Final decoder norm
+        _steer("model.norm.weight", "model.decoder.norm.weight", STEERING_ALPHA_NORM, "final_norm")
+
+        _total = sum(_counts.values())
+        print(f"\n  ✅ Steered {_total} tensors: {_counts}")
+        if _mismatch:
+            print(f"  ⚠️ {len(_mismatch)} keys di-skip (missing/shape mismatch). Contoh:")
+            for _m in _mismatch[:10]:
+                print(f"     - {_m}")
+        if _total == 0:
+            raise RuntimeError("[STEER] Tidak ada satupun tensor yang tersuntik — cek key mapping / shape!")
+
+        # Bebaskan 2 model donor sebelum test & save
+        del _g_base, _g_it, _gb_sd, _gi_sd
+        gc.collect()
+
+        # ---- 3. Smoke test (generate singkat sebelum upload) ----
+        if STEERING_SMOKE_TEST:
+            print("\n  [SMOKE TEST] Generate 3 prompt singkat (eyeball garbage check)...")
+            from transformers import AutoTokenizer as _SteerTok
+            _smoke_tok = _SteerTok.from_pretrained(BASE_T5_MODEL, token=_token, trust_remote_code=True)
+            assert _smoke_tok is not None, f"Gagal memuat tokenizer dari {BASE_T5_MODEL} untuk smoke test"
+            _t5.to("cuda" if torch.cuda.is_available() else "cpu")
+            _t5.eval()
+            _smoke_prompts = [
+                "user: Halo! Perkenalkan dirimu secara singkat.",
+                "user: Apa ibu kota Indonesia?",
+                "user: Tolong ringkas: Fotosintesis adalah proses tumbuhan mengubah cahaya matahari menjadi energi.",
+            ]
+            with torch.no_grad():
+                for _p in _smoke_prompts:
+                    _fmt = format_encoder_from_raw(_p)
+                    _ids = _smoke_tok.encode(_fmt, add_special_tokens=True, return_tensors="pt").to(_t5.device)
+                    _out = _t5.generate(
+                        input_ids=_ids, max_new_tokens=48, do_sample=False,
+                        pad_token_id=_smoke_tok.pad_token_id,
+                    )
+                    _resp = _smoke_tok.decode(_out[0][_ids.shape[-1]:], skip_special_tokens=True)
+                    print(f"\n  Q: {_p}\n  A: {_resp}")
+            _t5.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        # ---- 4. Save + tokenizer + patch + upload ----
+        _local = "/tmp/t5gemma2_steered"
+        print(f"\n  Saving steered checkpoint ke {_local} ...")
+        os.makedirs(_local, exist_ok=True)
+        _t5.save_pretrained(_local, safe_serialization=True)
+        from transformers import AutoTokenizer as _SteerTok2
+        _steer_tok = _SteerTok2.from_pretrained(BASE_T5_MODEL, token=_token, trust_remote_code=True)
+        assert _steer_tok is not None, f"Gagal memuat tokenizer dari {BASE_T5_MODEL}"
+        _steer_tok.save_pretrained(_local)
+
+        # Patch tokenizer_config: tambahkan task_prefix_mapping (inline — setara
+        # dengan isi tokenizer_config_patched.json di repo v6)
+        import json as _json
+        _tc_path = os.path.join(_local, "tokenizer_config.json")
+        with open(_tc_path, "r", encoding="utf-8") as _f:
+            _tc = _json.load(_f)
+        _tc.setdefault("task_prefix_mapping", {
+            "<unused1>": "summarize",
+            "<unused2>": "translate",
+            "<unused3>": "ner",
+            "<unused4>": "qa",
+            "<unused5>": "paraphrase",
+            "<unused6>": "general_chat",
+        })
+        with open(_tc_path, "w", encoding="utf-8") as _f:
+            _json.dump(_tc, _f, indent=2, ensure_ascii=False)
+        print("  ✅ tokenizer_config dipatch dengan task_prefix_mapping")
+
+        print(f"\n  Uploading ke {UNIFIED_HF_REPO} subfolder '{STEERED_SUBFOLDER}/'...")
+        _api.upload_folder(
+            folder_path=_local,
+            path_in_repo=STEERED_SUBFOLDER,
+            repo_id=UNIFIED_HF_REPO,
+            repo_type="model",
+            commit_message=(
+                f"Phase 0.5 Task Vector Steering: ffn={STEERING_ALPHA_FFN}, qo={STEERING_ALPHA_QO}, "
+                f"kv={STEERING_ALPHA_KV}, norm={STEERING_ALPHA_NORM} (Gemma3-IT − Gemma3-Base)"
             ),
         )
 
-        print("=" * 90)
-        print("  [CANGKOK] SigLIP + Projector Gemma 3 4B IT → text/merged_bf16")
-        print("=" * 90)
-
-        # 0. Bebaskan VRAM (dua model bf16 4B akan dimuat)
+        del _t5, _t5_sd, _steer_tok
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # 1. Load target = text merged hasil Phase 1
-        print(f"\n[A] Loading target merged: {CANGKOK_HF_REPO} / {CANGKOK_TEXT_SUBFOLDER} ...")
-        _model_tgt = _AutoSeq2Seq.from_pretrained(
-            CANGKOK_HF_REPO, subfolder=CANGKOK_TEXT_SUBFOLDER,
-            torch_dtype=torch.bfloat16, token=_token,
+        print(f"\n  ✅ [STEER] BERHASIL! Checkpoint steered di {UNIFIED_HF_REPO}/{STEERED_SUBFOLDER}")
+        steered_ready = True
+    else:
+        print("⏭️ [STEER] Dilewati — ENABLE_STEERING=False / steered sudah ada (tanpa FORCE) / stage sudah lewat.")
+        steered_ready = True
+    return (steered_ready,)
+
+
+# #####################################################################
+#   PHASE 1.5 — VISION GRAFTING (SigLIP + Projector ← Gemma 3 4B IT)
+# #####################################################################
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ---
+    # 🌱 Phase 1.5 — Cangkok Vision Tower
+    Mencangkokkan `vision_tower` (SigLIP 400M) + `multi_modal_projector` dari
+    **Gemma 3 4B IT** ke checkpoint hasil Phase 0.5 (atau base T5Gemma jika steering OFF).
+
+    - **Aman**: SigLIP = encoder visual murni, tidak tersentuh *Merged Attention* decoder.
+      Shape dimensi SigLIP Gemma 3 4B ≡ T5Gemma-2 (sama-sama SigLIP 400M).
+    - Output di-upload ke subfolder `cangkok/` + tokenizer dipatch `task_prefix_mapping`.
+    - **TIDAK mencangkok decoder Gemma-IT mentah-mentah** (terbukti merusak output — lihat
+      `docs/Reverse Engineering T5Gemma Merge Attention.md`).
+    """)
+    return
+
+
+@app.cell
+def _(
+    BASE_T5_MODEL,
+    CANGKOK_FORCE,
+    CANGKOK_SUBFOLDER,
+    ENABLE_STEERING,
+    GEMMA_IT_MODEL,
+    STEERED_SUBFOLDER,
+    UNIFIED_HF_REPO,
+    gc,
+    os,
+    pipeline_stage,
+    steered_ready,
+    torch,
+):
+    from huggingface_hub import HfApi as _GraftApi
+
+    _token = os.environ.get("HF_TOKEN")
+    _api = _GraftApi(token=_token)
+    _files = _api.list_repo_files(UNIFIED_HF_REPO)
+    _already = any(
+        f.startswith(f"{CANGKOK_SUBFOLDER}/") and f.endswith("config.json") for f in _files
+    )
+
+    _should_run = pipeline_stage == "cangkok" and (CANGKOK_FORCE or not _already)
+    if _should_run:
+
+        print("=" * 90)
+        print("  [CANGKOK] Grafting SigLIP + Projector Gemma 3 4B IT")
+        print("=" * 90)
+
+        # ---- 0. Bebaskan VRAM ----
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # ---- 1. Tentukan & load TARGET ----
+        from transformers import AutoModelForSeq2SeqLM as _GraftSeq2Seq
+        from transformers import AutoModelForCausalLM as _GraftCausal
+        from transformers import AutoProcessor as _GraftProc
+
+        if ENABLE_STEERING:
+            _tgt_id = UNIFIED_HF_REPO
+            _tgt_kw = dict(subfolder=STEERED_SUBFOLDER)
+            print(f"\n[A] Target: {UNIFIED_HF_REPO} / steered (hasil Phase 0.5)")
+        else:
+            _tgt_id = BASE_T5_MODEL
+            _tgt_kw = {}
+            print(f"\n[A] Target: {BASE_T5_MODEL} (steering OFF)")
+
+        print("    Loading target (CPU, bf16)...")
+        _model_tgt = _GraftSeq2Seq.from_pretrained(
+            _tgt_id, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True, **_tgt_kw
         )
         print(f"    ✅ {_model_tgt.__class__.__name__}")
 
-        # 2. Load source donor
-        print(f"\n[C] Loading donor: {CANGKOK_GEMMA3_IT} ...")
-        _model_src = _AutoCausal.from_pretrained(
-            CANGKOK_GEMMA3_IT, torch_dtype=torch.bfloat16, token=_token,
+        # ---- 2. Load DONOR ----
+        print(f"\n[C] Loading donor: {GEMMA_IT_MODEL} ...")
+        _model_src = _GraftCausal.from_pretrained(
+            GEMMA_IT_MODEL, torch_dtype=torch.bfloat16, token=_token, trust_remote_code=True
         )
         print(f"    ✅ {_model_src.__class__.__name__}")
 
-        # 3. Build source param dict (gemma3 path → normalized)
+        # ---- 3. Ekstrak vision params donor (normalisasi prefix model.) ----
         _src_params = {}
         for _name, _param in _model_src.named_parameters():
             if "vision_tower" in _name or "multi_modal_projector" in _name:
@@ -2519,7 +1561,7 @@ def _(
                 _src_params[_clean] = _param.detach().cpu()
         print(f"\n  Donor: {len(_src_params)} vision params (SigLIP + projector)")
 
-        # 4. CANGKOK: copy donor → target (path mapping t5gemma2)
+        # ---- 4. CANGKOK: copy donor → target ----
         print("\n  Melakukan cangkok...")
         _grafted = 0
         _skipped = 0
@@ -2545,7 +1587,7 @@ def _(
                 _skipped += 1
         print(f"  ✅ Cangkok: {_grafted} params, skip: {_skipped}")
 
-        # 5. Verifikasi cangkok (diff target vs donor, harus < 1e-6)
+        # ---- 5. Verifikasi (diff target vs donor harus < 1e-6) ----
         print("\n  Verifikasi cangkok...")
         _v_ok = 0
         _v_fail = 0
@@ -2567,319 +1609,292 @@ def _(
         print(f"  ✅ Verify: {_v_ok} OK, {_v_fail} fail")
         if _v_fail > 0 or _grafted == 0:
             raise RuntimeError(
-                f"[CANGKOK] Gagal: {_grafted} params digraft, {_v_fail} verify fail. "
-                "Cek log SHAPE MISMATCH / verify fail di atas."
+                f"[CANGKOK] Gagal: {_grafted} params digraft, {_v_fail} verify fail."
             )
 
-        # 6. Save lokal + processor donor, lalu upload ke unified repo
-        _local_save = "/tmp/v6_vision_cangkok"
-        print(f"\n  Saving lokal ke {_local_save}...")
+        # ---- 6. Save + processor donor-kompatibel + tokenizer patch + upload ----
+        _local_save = "/tmp/v7_vision_cangkok"
         os.makedirs(_local_save, exist_ok=True)
+        print(f"\n  Saving lokal ke {_local_save}...")
         _model_tgt.save_pretrained(_local_save, safe_serialization=True)
 
-        # Processor dari T5Gemma2 ORIGINAL (v6 merged text hanya punya tokenizer,
-        # tidak ada image processor)
-        _processor_orig = _AutoProc.from_pretrained(CANGKOK_ORIG_T5GEMMA2, token=_token)
+        # Processor dari T5Gemma2 ORIGINAL (punya full preprocessor_config.json)
+        _processor_orig = _GraftProc.from_pretrained(BASE_T5_MODEL, token=_token)
         _processor_orig.save_pretrained(_local_save)
 
-        print(f"  Uploading ke {CANGKOK_HF_REPO} subfolder '{CANGKOK_HF_PREFIX}/'...")
+        # Patch tokenizer_config: task_prefix_mapping (inline, sama seperti Phase 0.5)
+        import json as _json
+        _tc_path = os.path.join(_local_save, "tokenizer_config.json")
+        with open(_tc_path, "r", encoding="utf-8") as _f:
+            _tc = _json.load(_f)
+        _tc.setdefault("task_prefix_mapping", {
+            "<unused1>": "summarize",
+            "<unused2>": "translate",
+            "<unused3>": "ner",
+            "<unused4>": "qa",
+            "<unused5>": "paraphrase",
+            "<unused6>": "general_chat",
+        })
+        with open(_tc_path, "w", encoding="utf-8") as _f:
+            _json.dump(_tc, _f, indent=2, ensure_ascii=False)
+
+        print(f"  Uploading ke {UNIFIED_HF_REPO} subfolder '{CANGKOK_SUBFOLDER}/'...")
         _api.upload_folder(
             folder_path=_local_save,
-            path_in_repo=CANGKOK_HF_PREFIX,
-            repo_id=CANGKOK_HF_REPO,
+            path_in_repo=CANGKOK_SUBFOLDER,
+            repo_id=UNIFIED_HF_REPO,
             repo_type="model",
-            commit_message="Cangkok SigLIP + projector dari Gemma 3 4B IT ke text/merged_bf16",
+            commit_message="Phase 1.5 Vision Grafting: SigLIP + projector dari Gemma 3 4B IT",
         )
 
-        # 7. TOKENIZER PATCH (dari scripts/tests/patch_cangkok_tokenizer.py):
-        # replace tokenizer_config.json cangkok dengan versi text/merged_bf16
-        # (lengkap: added_tokens_decoder + task_prefix_mapping untuk <unused1..6>)
-        from huggingface_hub import hf_hub_download as _hf_dl
-        print(f"\n  Patch tokenizer_config.json dari '{CANGKOK_TEXT_SUBFOLDER}'...")
-        _tc_path = _hf_dl(
-            repo_id=CANGKOK_HF_REPO,
-            filename="tokenizer_config.json",
-            subfolder=CANGKOK_TEXT_SUBFOLDER,
-            token=_token,
-        )
-        _api.upload_file(
-            path_or_fileobj=_tc_path,
-            path_in_repo=f"{CANGKOK_HF_PREFIX}/tokenizer_config.json",
-            repo_id=CANGKOK_HF_REPO,
-            commit_message="Fix: tokenizer_config dari text/merged_bf16 (lengkap dgn added_tokens_decoder + task_prefix_mapping)",
-        )
-
-        print(f"\n  ✅ [CANGKOK] BERHASIL! Model cangkok di: {CANGKOK_HF_REPO} subfolder '{CANGKOK_HF_PREFIX}/'")
-        print("     Dipakai Phase 2 sebagai VISION_MODEL_NAME + VISION_SUBFOLDER='cangkok'.")
-
-        # Cleanup
         del _model_tgt, _model_src, _src_params, _processor_orig
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+        print(f"\n  ✅ [CANGKOK] BERHASIL! Base model training di: {UNIFIED_HF_REPO}/{CANGKOK_SUBFOLDER}")
+        cangkok_ready = True
+    else:
+        print("⏭️ [CANGKOK] Dilewati — cangkok sudah ada (tanpa FORCE) / stage sudah lewat.")
         cangkok_ready = True
     return (cangkok_ready,)
 
 
 # #####################################################################
-# #####################################################################
-#
-#   ██████╗ ██╗  ██╗ █████╗ ███████╗███████╗    ██████╗
-#   ██╔══██╗██║  ██║██╔══██╗██╔════╝██╔════╝    ╚════██╗
-#   ██████╔╝███████║███████║███████╗█████╗       █████╔╝
-#   ██╔═══╝ ██╔══██║██╔══██║╚════██║██╔══╝      ██╔═══╝
-#   ██║     ██║  ██║██║  ██║███████║███████╗    ███████╗
-#   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝    ╚══════╝
-#
-#   VISION PIPELINE  (dari working-molab-v6-vision-unsloth.py — logika identik)
-#   Base: UNIFIED_HF_REPO subfolder cangkok/  ->  Vision SFT  ->  ORPO  ->  merge
-#   Artifacts: UNIFIED_HF_REPO subfolder vision/
-#
-# #####################################################################
+#   PHASE 1 — JOINT SFT (vision + teks dicampur dalam 1 loop)
 # #####################################################################
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
     ---
-    # 📷 PHASE 2 — Multimodal Vision SFT + ORPO Fine-Tuning Pipeline (V6 Unsloth)
-    =====================================================================
-    Melatih aspek **vision** dari model **T5Gemma-2 4B-4B** menggunakan QLoRA/LoRA via Unsloth.
-    Model dasar = hasil Phase 1.5 (text merged + SigLIP/projector Gemma 3 IT cangkok),
-    dimuat dari unified repo subfolder **`cangkok/`**.
+    # 🎓 Phase 1 — JOINT SFT (Single-Stage Co-Training)
+    Dataset **vision** (`vision_sft`) dan **teks** (`chat_sft` + `indoqa_sft`) dicampur
+    dalam satu training loop dengan rasio target **`JOINT_TEXT_RATIO`** (default 0.3).
 
-    **Fitur utama (diwarisi dari notebook vision asli):**
-    - Pemrosesan gambar dokumen ilmiah/PDF (lazy — gambar hanya didecode saat collator jalan)
-    - Fine-tuning modular: `finetune_vision_layers=False` (SKIP SigLIP untuk menghindari
-      Unsloth merge bug), `multi_modal_projector` di-FULL-FT via `modules_to_save`
-    - Text-retention mix saat SFT + eval ganda (multimodal & text-only) untuk mendeteksi
-      catastrophic forgetting
+    - Text rows → format `{prompt_text, target_text, images: []}` (collator yang sama,
+      `pixel_values=None` aman bercampur dengan batch multimodal).
+    - Gambar vision tetap **lazy-load** (hanya didecode saat collator membaca batch).
+    - `multi_modal_projector` di-FULL-FT (`modules_to_save`), SigLIP frozen
+      (`finetune_vision_layers=False` — menghindari Unsloth merge bug).
     """)
     return
 
 
+@app.cell
+def _(DATASET_VISION_REPO, SAMPLE_TRAIN_VISION_SFT, VISION_SFT_CONFIG, load_dataset, random):
+    print(f"[DATA] Memuat vision SFT dari {DATASET_VISION_REPO} ({VISION_SFT_CONFIG})...")
+    vision_train_dataset = load_dataset(DATASET_VISION_REPO, VISION_SFT_CONFIG, split="train")
+
+    if SAMPLE_TRAIN_VISION_SFT > 0 and len(vision_train_dataset) > SAMPLE_TRAIN_VISION_SFT:
+        vision_train_dataset = vision_train_dataset.shuffle(seed=42).select(range(SAMPLE_TRAIN_VISION_SFT))
+        print(f"  (disampel menjadi {len(vision_train_dataset)})")
+    print(f"✅ [DATA] Vision SFT: {len(vision_train_dataset)} sampel.")
+    return (vision_train_dataset,)
+
+
+@app.cell
+def _(
+    ALL_SUPPRESS_IDS,
+    AutoProcessor,
+    CANGKOK_SUBFOLDER,
+    FastVisionModel,
+    JOINT_PREFIX,
+    LOAD_IN_4BIT,
+    LORA_ALPHA,
+    LORA_DROPOUT,
+    LORA_RANK,
+    LORA_USE_RSLORA,
+    OUTPUT_DIR,
+    SEED,
+    UNIFIED_HF_REPO,
+    apply_logit_mask,
+    cangkok_ready,
+    gc,
+    os,
+    pipeline_stage,
+    torch,
+):
+    _token = os.environ.get("HF_TOKEN")
+
+    # Stage efektif: kalau notebook mulai di steering/cangkok, sesi ini barusan
+    # menyelesaikan keduanya (edge cangkok_ready) -> lanjut ke SFT.
+    _stage = pipeline_stage
+    if _stage in ("steering", "cangkok"):
+        _stage = "sft"
+
+    model = None
+    processor = None
+    tokenizer = None
+
+    if _stage in ("done", "merge"):
+        print(f"[MODEL] Stage `{_stage}` — training sudah selesai; model tidak dimuat (merge cell yang akan load).")
+    else:
+        if _stage == "orpo":
+            _model_path = os.path.join(OUTPUT_DIR, JOINT_PREFIX, "sft", "final_adapter")
+            if not os.path.exists(_model_path):
+                from huggingface_hub import snapshot_download as _model_snap
+                print(f"📥 [MODEL] Downloading joint/sft/final_adapter dari HF untuk ORPO...")
+                _model_snap(
+                    repo_id=UNIFIED_HF_REPO,
+                    local_dir=_model_path,
+                    allow_patterns=[f"{JOINT_PREFIX}/sft/final_adapter/**"],
+                    token=_token,
+                )
+                _sub_dir = os.path.join(_model_path, JOINT_PREFIX, "sft", "final_adapter")
+                if os.path.exists(_sub_dir):
+                    import shutil as _sh_load
+                    for _item in os.listdir(_sub_dir):
+                        _src = os.path.join(_sub_dir, _item)
+                        _dst = os.path.join(_model_path, _item)
+                        if os.path.exists(_dst):
+                            if os.path.isdir(_dst):
+                                _sh_load.rmtree(_dst)
+                            else:
+                                os.remove(_dst)
+                        _sh_load.move(_src, _dst)
+                    _sh_load.rmtree(os.path.join(_model_path, JOINT_PREFIX))
+            print(f"[MODEL] ORPO stage — load SFT adapter dari: {_model_path}")
+            _load_kwargs = dict(
+                model_name=_model_path,
+                load_in_4bit=LOAD_IN_4BIT,
+                use_gradient_checkpointing="unsloth",
+                token=_token,
+            )
+        else:
+            # SFT stage — base = cangkok/ hasil Phase 1.5
+            print(f"[MODEL] SFT stage — load base dari {UNIFIED_HF_REPO} subfolder '{CANGKOK_SUBFOLDER}'...")
+            _load_kwargs = dict(
+                model_name=UNIFIED_HF_REPO,
+                subfolder=CANGKOK_SUBFOLDER,
+                load_in_4bit=LOAD_IN_4BIT,
+                use_gradient_checkpointing="unsloth",
+                token=_token,
+            )
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        model, tokenizer = FastVisionModel.from_pretrained(**_load_kwargs)
+
+        # Reset max_length to silence warning about max_new_tokens taking precedence
+        model.config.max_length = None
+        if hasattr(model, "generation_config") and model.generation_config is not None:
+            model.generation_config.max_length = None
+
+        processor = AutoProcessor.from_pretrained(
+            UNIFIED_HF_REPO, subfolder=CANGKOK_SUBFOLDER, token=_token
+        )
+
+        from unsloth.chat_templates import get_chat_template
+        tokenizer = get_chat_template(tokenizer, chat_template="gemma-3")
+        processor.chat_template = tokenizer.chat_template
+        if hasattr(processor, "tokenizer"):
+            processor.tokenizer.chat_template = tokenizer.chat_template
+
+        # Nonaktifkan penambahan bos_token otomatis untuk menghindari bos ganda saat inferensi
+        tokenizer.add_bos_token = False
+        if hasattr(processor, "tokenizer"):
+            processor.tokenizer.add_bos_token = False
+
+        # LoRA hanya saat SFT (ORPO me-load model yang sudah memiliki adapter)
+        if _stage == "sft":
+            print("[MODEL] Applying PEFT LoRA (vision_tower=SKIP, projector=FULL FT)...")
+            model = FastVisionModel.get_peft_model(
+                model,
+                finetune_vision_layers=False,      # ⚠️ SKIP vision tower (SigLIP) to avoid Unsloth merge bug
+                finetune_language_layers=True,
+                finetune_attention_modules=True,
+                finetune_mlp_modules=True,
+                modules_to_save=["multi_modal_projector"],  # FULL FT projector
+                r=LORA_RANK,
+                lora_alpha=LORA_ALPHA,
+                lora_dropout=LORA_DROPOUT,
+                bias="none",
+                random_state=SEED,
+                use_rslora=LORA_USE_RSLORA,
+            )
+        else:
+            print("[MODEL] Model sudah berisi adapter SFT (ORPO stage). Skip get_peft_model.")
+
+        if not hasattr(model.config, "text_config"):
+            type(model.config).text_config = property(lambda self: self.decoder)
+            type(model.config).get_text_config = lambda self, *args, **kwargs: self.decoder
+
+        apply_logit_mask(model, ALL_SUPPRESS_IDS)
+        FastVisionModel.for_training(model)
+
+    return model, processor, tokenizer
+
+
 # =====================================================================
-# KONFIGURASI HYPERPARAMETER VISION
+# JOINT SFT DATA MIXING (vision unroll + teks convert + ratio control)
 # =====================================================================
 @app.cell
-def _(BF16, UNIFIED_HF_REPO):
-    # MODEL BASE = repo cangkok hasil Phase 1.5 (subfolder "cangkok", bukan root)
-    VISION_MODEL_NAME = UNIFIED_HF_REPO
-    VISION_SUBFOLDER = "cangkok"
-    VISION_LOAD_IN_4BIT = True
-    VISION_OUTPUT_DIR = "results/t5gemma2_vision"
-    VISION_HF_CHECKPOINT_REPO = UNIFIED_HF_REPO  # artifacts -> subfolder vision/
-    VISION_HF_PREFIX = "vision"
-
-    # Dataset JSONL lokal (legacy, tidak dipakai — dataset dimuat dari HF Hub)
-    VISION_JSONL_DATASET_PATH = "data/multimodal/train_vision.jsonl"
-    VISION_ORPO_DATASET_PATH = "data/preference/orpo_multimodal.jsonl"
-
-    # LoRA config: r=256 (diselaraskan dengan versi teks)
-    VISION_LORA_RANK = 256
-    VISION_LORA_ALPHA = 512
-    VISION_LORA_DROPOUT = 0.2
-
-    # Seq2Seq lengths (cloud Molab 96GB)
-    VISION_MAX_SOURCE_LENGTH = 16384
-    VISION_MAX_TARGET_LENGTH = 2048
-    VISION_MAX_IMAGES_PER_CHAT = 10
-
-    # Training args
-    # NOTE: effective LR = LEARNING_RATE / GRADIENT_ACCUMULATION_STEPS.
-    # Disetara dengan text-only (1e-5 / 64 = 1.56e-7) agar decoder tidak
-    # belajar 8x lebih agresif dari sinyal multimodal yang masih noisy.
-    VISION_LEARNING_RATE = 5e-6
-    VISION_NUM_EPOCHS_SFT = 2
-    VISION_NUM_EPOCHS_ORPO = 1
-    VISION_ORPO_BETA = 0.1
-    VISION_PER_DEVICE_TRAIN_BATCH_SIZE = 2
-    VISION_GRADIENT_ACCUMULATION_STEPS = 32
-    VISION_WARMUP_STEPS = 100
-    VISION_WEIGHT_DECAY = 0.1
-    VISION_LR_SCHEDULER_TYPE = "cosine"
-    VISION_LOGGING_STEPS = 10
-    VISION_SAVE_TOTAL_LIMIT = 2
-    VISION_OPTIM = "paged_adamw_8bit"
-
-    # General random seed and validation split size
-    VISION_TEST_SIZE = 0.05
-
-    # Label smoothing & NEFTune
-    VISION_LABEL_SMOOTHING_FACTOR = 0.1
-    VISION_NEFTUNE_NOISE_ALPHA = 5.0
-    VISION_PREDICT_WITH_GENERATE = True
-    return (
-        BF16,
-        VISION_GRADIENT_ACCUMULATION_STEPS,
-        VISION_HF_CHECKPOINT_REPO,
-        VISION_HF_PREFIX,
-        VISION_JSONL_DATASET_PATH,
-        VISION_LABEL_SMOOTHING_FACTOR,
-        VISION_LEARNING_RATE,
-        VISION_LOAD_IN_4BIT,
-        VISION_LOGGING_STEPS,
-        VISION_LORA_ALPHA,
-        VISION_LORA_DROPOUT,
-        VISION_LORA_RANK,
-        VISION_LR_SCHEDULER_TYPE,
-        VISION_MAX_IMAGES_PER_CHAT,
-        VISION_MAX_SOURCE_LENGTH,
-        VISION_MAX_TARGET_LENGTH,
-        VISION_MODEL_NAME,
-        VISION_NEFTUNE_NOISE_ALPHA,
-        VISION_NUM_EPOCHS_ORPO,
-        VISION_NUM_EPOCHS_SFT,
-        VISION_OPTIM,
-        VISION_ORPO_BETA,
-        VISION_ORPO_DATASET_PATH,
-        VISION_OUTPUT_DIR,
-        VISION_PER_DEVICE_TRAIN_BATCH_SIZE,
-        VISION_PREDICT_WITH_GENERATE,
-        VISION_SAVE_TOTAL_LIMIT,
-        VISION_SUBFOLDER,
-        VISION_TEST_SIZE,
-        VISION_WARMUP_STEPS,
-        VISION_WEIGHT_DECAY,
+def _(
+    DATASET_TEXT_REPO,
+    JOINT_TEXT_RATIO,
+    MAX_EVAL_SAMPLES,
+    SAMPLE_TRAIN_CHAT,
+    SAMPLE_TRAIN_INDOQA,
+    SEED,
+    TEXT_CHAT_CONFIG,
+    TEXT_INDOQA_CONFIG,
+    VISION_TEST_SIZE,
+    Dataset,
+    format_encoder_from_raw,
+    load_hf_samples,
+    mo,
+    processor,
+    random,
+    text_sft_to_joint,
+    vision_train_dataset,
+):
+    mo.stop(
+        processor is None,
+        mo.md("⏭️ **[JOINT-SFT] Model tidak dimuat (stage done/merge) — data prep dilewati.**"),
     )
+    print("[JOINT-SFT] ===== Membangun dataset joint (vision + teks) =====")
 
-
-# =====================================================================
-# VISION: AUTO-DETECT PIPELINE STAGE DARI HF HUB
-# =====================================================================
-@app.cell
-def _(VISION_HF_CHECKPOINT_REPO, VISION_HF_PREFIX, cangkok_ready, mo, os):
-    from huggingface_hub import HfApi as _StageDetectApi
-
-    _hf_token = os.environ.get("HF_TOKEN")
-    _api = _StageDetectApi(token=_hf_token)
-
-    # Default
-    vision_current_stage = "sft"
-    vision_resume_checkpoint = None
-
-    try:
-        # Automatically create repository if it does not exist
-        if not _api.repo_exists(repo_id=VISION_HF_CHECKPOINT_REPO):
-            print(f"📍 [VISION] Repo '{VISION_HF_CHECKPOINT_REPO}' belum ada. Membuat repositori baru...")
-            _api.create_repo(repo_id=VISION_HF_CHECKPOINT_REPO, repo_type="model", private=False, exist_ok=True)
-
-        _repo_files = _api.list_repo_files(VISION_HF_CHECKPOINT_REPO)
-
-        # Cek apakah ORPO sudah selesai
-        if any(f.startswith(f"{VISION_HF_PREFIX}/orpo/final_adapter/") for f in _repo_files):
-            vision_current_stage = "done"
-            print("📍 [VISION] Pipeline stage: DONE — Semua training selesai!")
-
-        # Cek apakah SFT sudah selesai → lanjut ORPO
-        elif any(f.startswith(f"{VISION_HF_PREFIX}/sft/final_adapter/") for f in _repo_files):
-            vision_current_stage = "orpo"
-            # Ada checkpoint ORPO untuk resume?
-            _orpo_ckpts = sorted([
-                f for f in _repo_files
-                if f.startswith(f"{VISION_HF_PREFIX}/orpo/checkpoint-") and "/" in f[len(f"{VISION_HF_PREFIX}/orpo/checkpoint-"):]
-            ])
-            if _orpo_ckpts:
-                vision_resume_checkpoint = True
-                print(f"📍 [VISION] Pipeline stage: ORPO (resume dari checkpoint)")
+    # ---- 1. Unroll VISION SFT (gambar lazy via dataset_idx + image_indices) ----
+    print("[JOINT-SFT] Unrolling vision SFT (text-only pass)...")
+    vision_rows = []
+    messages_list = vision_train_dataset["messages"]
+    _arrow_images = vision_train_dataset._data.column("images")
+    for _idx, _msgs in enumerate(messages_list):
+        _num_actual_images = len(_arrow_images[_idx])
+        _image_idx = 0
+        clean_context = []
+        for _msg in _msgs:
+            _role = _msg["role"]
+            _content = _msg["content"]
+            if _role == "user" and "📷" in _content:
+                _n_imgs = _content.count("📷")
+                _text_content = _content.replace("📷", "").strip()
+                clean_content = []
+                for _ in range(_n_imgs):
+                    if _image_idx < _num_actual_images:
+                        clean_content.append({"type": "image"})
+                        _image_idx += 1
+                if _text_content:
+                    clean_content.append({"type": "text", "text": _text_content})
+                clean_context.append({"role": _role, "content": clean_content})
             else:
-                print("📍 [VISION] Pipeline stage: ORPO (mulai dari awal, load SFT adapter)")
+                clean_context.append({"role": _role, "content": [{"type": "text", "text": _content}]})
 
-        # SFT belum selesai
-        else:
-            vision_current_stage = "sft"
-            _sft_ckpts = sorted([
-                f for f in _repo_files
-                if f.startswith(f"{VISION_HF_PREFIX}/sft/checkpoint-") and "/" in f[len(f"{VISION_HF_PREFIX}/sft/checkpoint-"):]
-            ])
-            if _sft_ckpts:
-                vision_resume_checkpoint = True
-                print(f"📍 [VISION] Pipeline stage: SFT (resume dari checkpoint)")
-            else:
-                print("📍 [VISION] Pipeline stage: SFT (mulai dari awal)")
-    except Exception as e:
-        print(f"⚠️ Gagal mendeteksi stage VISION: {e}. Mulai SFT dari awal.")
-
-    mo.md(f"**📍 [VISION] Current Stage: `{vision_current_stage}`** | Resume: `{vision_resume_checkpoint}`")
-    return vision_current_stage, vision_resume_checkpoint
-
-
-# =====================================================================
-# VISION DATA UTILS (konversi record -> messages multimodal)
-# =====================================================================
-@app.cell
-def _(Image, os):
-    def convert_sft_record_to_vision(rec):
-        img_paths = rec.get("images", [])
-        if not img_paths:
-            return None
-
-        pil_images = []
-        if isinstance(img_paths[0], str):
-            for p in img_paths:
-                if os.path.exists(p):
-                    try:
-                        # Open but do NOT convert or load pixels into RAM yet (lazy-loading)
-                        pil_images.append(Image.open(p))
-                    except Exception:
-                        pass
-        else:
-            pil_images = img_paths
-
-        if not pil_images:
-            return None
-        old_messages = rec.get("messages", [])
-        new_messages = []
-        image_idx = 0
-        for msg in old_messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "user" and "📷" in content:
-                num_images = content.count("📷")
-                text_content = content.replace("📷", "").strip()
-                new_content = []
-                for _ in range(num_images):
-                    if image_idx < len(pil_images):
-                        new_content.append({"type": "image", "image": pil_images[image_idx]})
-                        image_idx += 1
-                if text_content:
-                    new_content.append({"type": "text", "text": text_content})
-                new_messages.append({"role": role, "content": new_content})
-            else:
-                new_messages.append({"role": role, "content": [{"type": "text", "text": content}]})
-        return {"messages": new_messages}
-
-    def unroll_vision_messages_to_sft_samples(messages, processor):
-        samples = []
-        for i, msg in enumerate(messages):
+        for i, msg in enumerate(clean_context):
             if msg["role"] != "assistant":
                 continue
-            context = messages[:i]
+            context = clean_context[:i]
             if not context:
                 continue
 
-            # Bersihkan konteks agar format pesannya standar sebelum dilewatkan ke template chat
-            clean_context = []
-            for m in context:
-                clean_content = []
-                if isinstance(m.get("content"), list):
-                    for b in m["content"]:
-                        if isinstance(b, dict):
-                            if "image" in b:
-                                clean_content.append({"type": "image"})
-                            elif "text" in b:
-                                clean_content.append({"type": "text", "text": b["text"]})
-                else:
-                    clean_content = m["content"]
-                clean_context.append({"role": m["role"], "content": clean_content})
+            prompt_text = processor.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
 
-            prompt_text = processor.apply_chat_template(clean_context, tokenize=False, add_generation_prompt=True)
-
-            images = []
-            for m in context:
-                if isinstance(m.get("content"), list):
-                    for b in m["content"]:
-                        if isinstance(b, dict) and "image" in b:
-                            images.append(b["image"])
+            _num_context_images = 0
+            for _m in context:
+                for _b in _m["content"]:
+                    if isinstance(_b, dict) and _b.get("type") == "image":
+                        _num_context_images += 1
 
             target_text = ""
             if isinstance(msg["content"], list):
@@ -2890,86 +1905,85 @@ def _(Image, os):
                 target_text = msg["content"]
 
             if target_text:
-                samples.append({"prompt_text": prompt_text, "images": images, "target_text": target_text})
-        return samples
+                vision_rows.append({
+                    "prompt_text": prompt_text,
+                    "target_text": target_text,
+                    "dataset_idx": _idx,
+                    "image_indices": list(range(_num_context_images)),
+                    "_modality": "vision",
+                })
+    print(f"  ✅ Vision rows (unrolled): {len(vision_rows)}")
 
-    def parse_orpo_prompt_to_messages(prompt_str, img_paths):
-        pil_images = []
-        if img_paths:
-            if isinstance(img_paths[0], str):
-                for p in img_paths:
-                    if os.path.exists(p):
-                        try:
-                            pil_images.append(Image.open(p))
-                        except Exception:
-                            pass
-            else:
-                pil_images = img_paths
+    # ---- 2. TEKS rows (chat_sft + indoqa_sft -> joint format) ----
+    print("[JOINT-SFT] Memuat teks train (chat_sft + indoqa_sft)...")
+    _chat_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "train", SAMPLE_TRAIN_CHAT)
+    _indoqa_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "train", SAMPLE_TRAIN_INDOQA)
+    text_rows = text_sft_to_joint(_chat_samples, is_chat=True) + text_sft_to_joint(_indoqa_samples, is_chat=False)
+    print(f"  ✅ Text rows total: {len(text_rows)} (chat={len(_chat_samples)}, indoqa={len(_indoqa_samples)})")
 
-        lines = prompt_str.split("\n")
-        raw_messages = []
-        current_role = None
-        current_lines = []
-        for line in lines:
-            if line.startswith("system: "):
-                if current_role is not None:
-                    raw_messages.append((current_role, "\n".join(current_lines)))
-                current_role = "system"
-                current_lines = [line[8:]]
-            elif line.startswith("user: "):
-                if current_role is not None:
-                    raw_messages.append((current_role, "\n".join(current_lines)))
-                current_role = "user"
-                current_lines = [line[6:]]
-            elif line.startswith("assistant: "):
-                if current_role is not None:
-                    raw_messages.append((current_role, "\n".join(current_lines)))
-                current_role = "assistant"
-                current_lines = [line[11:]]
-            else:
-                current_lines.append(line)
-        if current_role is not None:
-            raw_messages.append((current_role, "\n".join(current_lines)))
-        new_messages = []
-        image_idx = 0
-        for role, content in raw_messages:
-            if role == "user" and "📷" in content:
-                num_images = content.count("📷")
-                text_content = content.replace("📷", "").strip()
-                new_content = []
-                for _ in range(num_images):
-                    if image_idx < len(pil_images):
-                        new_content.append({"type": "image", "image": pil_images[image_idx]})
-                        image_idx += 1
-                if text_content:
-                    new_content.append({"type": "text", "text": text_content})
-                new_messages.append({"role": role, "content": new_content})
-            else:
-                new_messages.append({"role": role, "content": [{"type": "text", "text": content}]})
-        merged_messages = []
-        for msg in new_messages:
-            msg_role = msg["role"]
-            msg_content = msg["content"]
-            if merged_messages and merged_messages[-1]["role"] == msg_role:
-                last_msg = merged_messages.pop()
-                merged_content = list(last_msg["content"]) + list(msg_content)
-                merged_messages.append({"role": msg_role, "content": merged_content})
-            else:
-                merged_messages.append({"role": msg_role, "content": list(msg_content)})
-        return merged_messages
+    # ---- 3. RATIO CONTROL: target proporsi teks = JOINT_TEXT_RATIO ----
+    # n_text_target = ratio/(1-ratio) * n_vision ; subsample per chat_idx group
+    # (percakapan tidak terpotong) kalau teks berlebih.
+    _target_text = int((JOINT_TEXT_RATIO / max(1e-9, 1.0 - JOINT_TEXT_RATIO)) * len(vision_rows))
+    if len(text_rows) > _target_text:
+        random.seed(SEED)
+        # grup per chat_idx untuk chat rows; indoqa rows diperlakukan per-row
+        _chat_grouped = {}
+        _singles = []
+        for _r in text_rows:
+            # chat rows punya marker via _modality saja; gunakan heuristik grouping
+            _singles.append(_r)
+        random.shuffle(_singles)
+        text_rows = _singles[:_target_text]
+    _actual_ratio = len(text_rows) / max(1, len(text_rows) + len(vision_rows))
+    print(f"  📊 Mixing: vision={len(vision_rows)} | teks={len(text_rows)} "
+          f"(target ratio={JOINT_TEXT_RATIO:.2f}, aktual={_actual_ratio:.2f})")
 
-    return (
-        convert_sft_record_to_vision,
-        parse_orpo_prompt_to_messages,
-        unroll_vision_messages_to_sft_samples,
-    )
+    joint_rows = vision_rows + text_rows
+    random.seed(SEED)
+    random.shuffle(joint_rows)
+
+    # ---- 4. Split train/eval (multimodal dari vision rows; eval TEKS dari split validasi asli) ----
+    _vision_train = [r for r in vision_rows if True]  # semua vision masuk train
+    random.seed(SEED)
+    _vision_eval_pool = [r for r in vision_rows]
+    random.shuffle(_vision_eval_pool)
+    _n_eval_mm = min(MAX_EVAL_SAMPLES, max(5, int(len(_vision_eval_pool) * VISION_TEST_SIZE)))
+    _eval_mm_rows = _vision_eval_pool[:_n_eval_mm]
+
+    # Eval text-only dari VALIDATION split dataset teks (baseline v6, dipertahankan)
+    _eval_text_rows = []
+    try:
+        _val_chat = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "validation", 0)
+        _val_indoqa = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "validation", 0)
+        _eval_text_rows = text_sft_to_joint(_val_chat, is_chat=True) + text_sft_to_joint(_val_indoqa, is_chat=False)
+        random.seed(42)
+        random.shuffle(_eval_text_rows)
+        _eval_text_rows = _eval_text_rows[:MAX_EVAL_SAMPLES]
+        print(f"  ✅ Text-only eval: {len(_eval_text_rows)} rows (dari validation split)")
+    except Exception as e:
+        print(f"  ⚠️ Gagal memuat eval text-only: {e}")
+
+    joint_sft_train_dataset = Dataset.from_list(joint_rows)
+    joint_eval_multimodal = Dataset.from_list(_eval_mm_rows) if _eval_mm_rows else None
+    joint_eval_text_only = Dataset.from_list(_eval_text_rows) if _eval_text_rows else None
+
+    joint_sft_eval_datasets = {}
+    if joint_eval_multimodal is not None:
+        joint_sft_eval_datasets["multimodal"] = joint_eval_multimodal
+    if joint_eval_text_only is not None:
+        joint_sft_eval_datasets["text_only"] = joint_eval_text_only
+
+    print(f"\n  ✅ JOINT SFT train: {len(joint_sft_train_dataset)} | "
+          f"eval sets: {list(joint_sft_eval_datasets.keys())}")
+    return joint_eval_multimodal, joint_eval_text_only, joint_sft_eval_datasets, joint_sft_train_dataset
 
 
 # =====================================================================
-# VISION: COLLATORS & TRAINERS
+# COLLATORS (vision-capable; teks-only aman bercampur dalam batch sama)
 # =====================================================================
 @app.cell
-def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
+def _(torch):
     class Seq2SeqVisionCollator:
         def __init__(self, processor, max_src, max_tgt, train_dataset=None):
             self.processor = processor
@@ -3048,7 +2062,7 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
                 images = None
                 if "images" in item and item["images"]:
                     images = item["images"]
-                elif "dataset_idx" in item and self.train_dataset is not None:
+                elif "dataset_idx" in item and self.train_dataset is not None and item["dataset_idx"] >= 0:
                     try:
                         full_images = self.train_dataset[item["dataset_idx"]]["images"]
                         indices = item.get("image_indices", [])
@@ -3063,12 +2077,10 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
                 input_ids = enc["input_ids"][0].tolist()
                 attention_mask = enc["attention_mask"][0].tolist()
 
-                # Prepend BOS jika belum ada
                 if self.tok.bos_token_id is not None and (not input_ids or input_ids[0] != self.tok.bos_token_id):
                     input_ids = [self.tok.bos_token_id] + input_ids
                     attention_mask = [1] + attention_mask
 
-                # Append EOS jika belum ada
                 if self.tok.eos_token_id is not None and (not input_ids or input_ids[-1] != self.tok.eos_token_id):
                     input_ids = input_ids + [self.tok.eos_token_id]
                     attention_mask = attention_mask + [1]
@@ -3089,7 +2101,95 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
                 out["pixel_values"] = torch.cat(pvals, dim=0) if pvals[0].ndim == 4 else torch.stack(pvals, dim=0)
             return out
 
-    class VisionORPOTrainer(Seq2SeqTrainer):
+    return Seq2SeqVisionCollator, VisionORPOCollator
+
+
+# =====================================================================
+# TRAINERS (label-smoothing SFT + split-forward ORPO)
+# =====================================================================
+@app.cell
+def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
+    class JointSFTTrainer(Seq2SeqTrainer):
+        def __init__(self, suppress_ids=None, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.model_accepts_loss_kwargs = False
+            if self.args.label_smoothing_factor > 0 and suppress_ids is not None:
+                self.label_smoother = SelectiveLabelSmoother(
+                    epsilon=self.args.label_smoothing_factor,
+                    suppress_ids=suppress_ids,
+                )
+
+        def compute_loss(
+            self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs
+        ):
+            labels = inputs.get("labels")
+            outputs = model(**inputs)
+
+            if self.label_smoother is not None and labels is not None:
+                loss = self.label_smoother(outputs, labels)
+            else:
+                if isinstance(outputs, dict) and "logits" in outputs:
+                    logits = outputs["logits"]
+                elif isinstance(outputs, tuple):
+                    logits = outputs[1] if len(outputs) > 1 else outputs[0].logits
+                else:
+                    logits = outputs.logits
+                loss_fct = torch.nn.CrossEntropyLoss(
+                    ignore_index=-100, reduction="mean"
+                )
+                loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+
+            return (loss, outputs) if return_outputs else loss
+
+        def evaluate(
+            self,
+            eval_dataset=None,
+            ignore_keys=None,
+            metric_key_prefix="eval",
+        ):
+            import math
+            import gc
+            from unsloth import FastVisionModel
+            if hasattr(FastVisionModel, "for_inference"):
+                FastVisionModel.for_inference(self.model)
+            else:
+                self.model.eval()
+            metrics = super().evaluate(
+                eval_dataset=eval_dataset,
+                ignore_keys=ignore_keys,
+                metric_key_prefix=metric_key_prefix,
+            )
+            for k in list(metrics.keys()):
+                if k.endswith("_loss") and k.startswith("eval_"):
+                    ppl_key = k.replace("_loss", "_perplexity")
+                    try:
+                        metrics[ppl_key] = math.exp(metrics[k])
+                    except OverflowError:
+                        metrics[ppl_key] = float("inf")
+
+            # KRITIS: kembalikan ke training kernels + mode train setelah eval.
+            if hasattr(FastVisionModel, "for_training"):
+                FastVisionModel.for_training(self.model)
+            else:
+                self.model.train()
+            torch._dynamo.reset()
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            return metrics
+
+        def log(self, logs, start_time=None):
+            import math
+            for k in list(logs.keys()):
+                if k.endswith("_loss") and k.startswith("eval_"):
+                    ppl_key = k.replace("_loss", "_perplexity")
+                    try:
+                        logs[ppl_key] = math.exp(logs[k])
+                    except OverflowError:
+                        logs[ppl_key] = float("inf")
+            super().log(logs, start_time=start_time)
+
+    class JointORPOTrainer(Seq2SeqTrainer):
         def __init__(self, beta=0.1, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.beta = beta
@@ -3139,16 +2239,12 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
             return (loss, co) if return_outputs else loss
 
         def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None, **kwargs):
-            # Seq2SeqTrainer.evaluate() langsung memakai `inputs` mentah buat
-            # model.generate(**inputs). Key "chosen_labels"/"rejected_labels" dari
-            # collator ORPO bukan kwarg valid buat .generate() -> harus dibuang di
-            # sini juga (compute_loss cuma nge-pop pas training, gak kepakai pas eval).
+            # Buang chosen/rejected labels sebelum .generate() saat eval,
+            # dan pakai "chosen" sebagai referensi untuk hitung metrics.
             inputs = dict(inputs)
             cl = inputs.pop("chosen_labels", None)
             inputs.pop("rejected_labels", None)
             if cl is not None and "labels" not in inputs:
-                # Pakai jawaban "chosen" (yang disukai) sebagai referensi buat
-                # hitung eval loss/ROUGE/BLEU dari hasil generate.
                 inputs["labels"] = cl
             return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys, **kwargs)
 
@@ -3161,7 +2257,6 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
             import math
             import gc
             from unsloth import FastVisionModel
-            # Switch ke inference kernels sebelum evaluate/generate (mirip text-only)
             if hasattr(FastVisionModel, "for_inference"):
                 FastVisionModel.for_inference(self.model)
             else:
@@ -3171,9 +2266,6 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
                 ignore_keys=ignore_keys,
                 metric_key_prefix=metric_key_prefix,
             )
-            # Hitung perplexity untuk setiap eval sub-dataset (multimodal & text-only).
-            # metric_key_prefix selalu "eval" saat trainer memanggil evaluate() dengan
-            # dict eval_dataset, jadi kita harus iterate semua key *_loss yang ada.
             for k in list(metrics.keys()):
                 if k.endswith("_loss") and k.startswith("eval_"):
                     ppl_key = k.replace("_loss", "_perplexity")
@@ -3182,14 +2274,10 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
                     except OverflowError:
                         metrics[ppl_key] = float("inf")
 
-            # KRITIS: kembalikan ke training kernels + mode train. Tanpa ini model
-            # tetap di eval state -> gradient checkpointing mati -> OOM & degradasi
-            # silent saat training dilanjutkan setelah eval.
             if hasattr(FastVisionModel, "for_training"):
                 FastVisionModel.for_training(self.model)
             else:
                 self.model.train()
-            # Vision kernels fullgraph=True -> flush cache rekompilasi Dynamo.
             torch._dynamo.reset()
             gc.collect()
             if torch.cuda.is_available():
@@ -3207,108 +2295,87 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
                         logs[ppl_key] = float("inf")
             super().log(logs, start_time=start_time)
 
-    class VisionCustomSeq2SeqTrainer(Seq2SeqTrainer):
-        def __init__(self, suppress_ids=None, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.model_accepts_loss_kwargs = False
-            if self.args.label_smoothing_factor > 0 and suppress_ids is not None:
-                self.label_smoother = SelectiveLabelSmoother(
-                    epsilon=self.args.label_smoothing_factor,
-                    suppress_ids=suppress_ids,
-                )
-
-        def compute_loss(
-            self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs
-        ):
-            labels = inputs.get("labels")
-            outputs = model(**inputs)
-
-            if self.label_smoother is not None and labels is not None:
-                loss = self.label_smoother(outputs, labels)
-            else:
-                if isinstance(outputs, dict) and "logits" in outputs:
-                    logits = outputs["logits"]
-                elif isinstance(outputs, tuple):
-                    logits = outputs[1] if len(outputs) > 1 else outputs[0].logits
-                else:
-                    logits = outputs.logits
-                loss_fct = torch.nn.CrossEntropyLoss(
-                    ignore_index=-100, reduction="mean"
-                )
-                loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-
-            return (loss, outputs) if return_outputs else loss
-
-        def evaluate(
-            self,
-            eval_dataset=None,
-            ignore_keys=None,
-            metric_key_prefix="eval",
-        ):
-            import math
-            import gc
-            from unsloth import FastVisionModel
-            # Switch ke inference kernels sebelum evaluate/generate (mirip text-only v6)
-            if hasattr(FastVisionModel, "for_inference"):
-                FastVisionModel.for_inference(self.model)
-            else:
-                self.model.eval()
-            metrics = super().evaluate(
-                eval_dataset=eval_dataset,
-                ignore_keys=ignore_keys,
-                metric_key_prefix=metric_key_prefix,
-            )
-            # Hitung perplexity untuk setiap eval sub-dataset (multimodal & text-only).
-            # metric_key_prefix selalu "eval" saat trainer memanggil evaluate() dengan
-            # dict eval_dataset, jadi kita harus iterate semua key *_loss yang ada.
-            for k in list(metrics.keys()):
-                if k.endswith("_loss") and k.startswith("eval_"):
-                    ppl_key = k.replace("_loss", "_perplexity")
-                    try:
-                        metrics[ppl_key] = math.exp(metrics[k])
-                    except OverflowError:
-                        metrics[ppl_key] = float("inf")
-
-            # KRITIS: kembalikan ke training kernels + mode train. Tanpa ini model
-            # tetap di eval state -> gradient checkpointing ("unsloth") mati ->
-            # seluruh activation graph ditahan saat training resume -> OOM di step
-            # setelah eval pertama (mirip bug OOM step ~97). for_training() juga
-            # me-reload triton training kernels agar gradient update kembali optimal.
-            if hasattr(FastVisionModel, "for_training"):
-                FastVisionModel.for_training(self.model)
-            else:
-                self.model.train()
-            # Vision kernels dikompilasi dengan fullgraph=True. Setiap switch
-            # for_inference<->for_training memicu rekompilasi Dynamo. Flush cache
-            # agar counter rekompilasi tidak melebihi limit (Hard failure
-            # "recompile_limit exceeded") dan sekaligus bebaskan memori graf.
-            torch._dynamo.reset()
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            return metrics
-
-        def log(self, logs, start_time=None):
-            import math
-            for k in list(logs.keys()):
-                if k.endswith("_loss") and k.startswith("eval_"):
-                    ppl_key = k.replace("_loss", "_perplexity")
-                    try:
-                        logs[ppl_key] = math.exp(logs[k])
-                    except OverflowError:
-                        logs[ppl_key] = float("inf")
-            super().log(logs, start_time=start_time)
-
-    return (
-        Seq2SeqVisionCollator,
-        VisionCustomSeq2SeqTrainer,
-        VisionORPOCollator,
-        VisionORPOTrainer,
-    )
+    return JointORPOTrainer, JointSFTTrainer
 
 
 # =====================================================================
-# VISION CALLBACKS: Training Plot, Notebook Progress, Sample Gen, Hub Upload
+# METRICS FACTORY (dipakai SFT & ORPO)
+# =====================================================================
+@app.cell
+def _(Any, bertscore_metric, bleu_metric, cast, exact_match_metric, meteor_metric, np, rouge_metric):
+    def make_compute_metrics(processor):
+        def _compute_metrics(eval_preds):
+            metrics = {}
+            if rouge_metric is None and bleu_metric is None:
+                return metrics
+            preds, labels = eval_preds
+            if isinstance(preds, tuple):
+                preds = preds[0]
+            tok = cast(Any, processor.tokenizer)
+
+            if preds.ndim == 3:
+                preds = preds.argmax(axis=-1)
+
+            labels = np.where(labels != -100, labels, tok.pad_token_id)
+            preds = np.where(preds != -100, preds, tok.pad_token_id)
+            decoded_preds = tok.batch_decode(preds, skip_special_tokens=True)
+            decoded_labels = tok.batch_decode(labels, skip_special_tokens=True)
+            decoded_preds = [pred.strip() for pred in decoded_preds]
+            decoded_labels = [label.strip() for label in decoded_labels]
+
+            if rouge_metric is not None:
+                try:
+                    result = cast(Any, rouge_metric).compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=False)
+                    if result is not None:
+                        for key, value in result.items():
+                            metrics[key] = value * 100
+                except Exception as e:
+                    print(f"Error during ROUGE: {e}")
+
+            if bleu_metric is not None:
+                try:
+                    formatted_labels = [[label] for label in decoded_labels]
+                    bleu_result = cast(Any, bleu_metric).compute(predictions=decoded_preds, references=formatted_labels)
+                    if bleu_result is not None and "bleu" in bleu_result:
+                        metrics["bleu"] = bleu_result["bleu"] * 100
+                except Exception as e:
+                    print(f"Error during BLEU: {e}")
+
+            if exact_match_metric is not None:
+                try:
+                    em_result = cast(Any, exact_match_metric).compute(predictions=decoded_preds, references=decoded_labels)
+                    if em_result is not None and "exact_match" in em_result:
+                        metrics["exact_match"] = em_result["exact_match"] * 100
+                except Exception as e:
+                    print(f"Error during Exact Match: {e}")
+
+            if bertscore_metric is not None:
+                try:
+                    bertscore_result = cast(Any, bertscore_metric).compute(
+                        predictions=decoded_preds, references=decoded_labels,
+                        model_type="google/embeddinggemma-300m", num_layers=12, lang="id"
+                    )
+                    if bertscore_result is not None and "f1" in bertscore_result:
+                        metrics["bertscore_f1"] = np.mean(bertscore_result["f1"]) * 100
+                except Exception as e:
+                    print(f"Error during BERTScore: {e}")
+
+            if meteor_metric is not None:
+                try:
+                    meteor_result = cast(Any, meteor_metric).compute(predictions=decoded_preds, references=decoded_labels)
+                    if meteor_result is not None and "meteor" in meteor_result:
+                        metrics["meteor"] = meteor_result["meteor"] * 100
+                except Exception as e:
+                    print(f"Error during METEOR: {e}")
+
+            return metrics
+        return _compute_metrics
+
+    return (make_compute_metrics,)
+
+
+# =====================================================================
+# CALLBACKS (plot dual-modality, progress bersih, sample gen, hub upload)
 # =====================================================================
 @app.cell
 def _(
@@ -3340,9 +2407,8 @@ def _(
             if logs is None:
                 return
 
-            # Hapus eval_loss dari logs agar kolom "Validation Loss" (yang selalu "No log")
-            # tidak tampil di widget training. Eval sudah di-split menjadi
-            # multimodal & text-only, jadi eval_loss gabungan tidak relevan.
+            # Hapus eval_loss dari logs agar kolom "Validation Loss" bawaan
+            # (yang selalu "No log") tidak tampil; eval sudah di-split per-modality.
             logs.pop("eval_loss", None)
             logs.pop("eval_perplexity", None)
 
@@ -3367,7 +2433,6 @@ def _(
 
             fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
 
-            # 1. Plot Loss Curve
             if self.train_losses:
                 ax1.plot(self.train_steps, self.train_losses, color="#3498DB", linewidth=2, label="Train Loss")
 
@@ -3389,7 +2454,6 @@ def _(
             ax1.grid(True, alpha=0.3)
             ax1.legend()
 
-            # 2. Plot Perplexity Curve
             m_ppl_steps = [s for s in steps if "eval_multimodal_perplexity" in self.eval_data[s]]
             if m_ppl_steps:
                 m_ppls = [self.eval_data[s]["eval_multimodal_perplexity"] for s in m_ppl_steps]
@@ -3406,7 +2470,6 @@ def _(
             ax2.grid(True, alpha=0.3)
             ax2.legend()
 
-            # 3. Plot Multimodal Quality Metrics
             metrics_list = [
                 ("eval_multimodal_rouge1", "ROUGE-1", "#E67E22", "o"),
                 ("eval_multimodal_rouge2", "ROUGE-2", "#D35400", "x"),
@@ -3425,7 +2488,6 @@ def _(
             ax3.grid(True, alpha=0.3)
             ax3.legend()
 
-            # 4. Plot Text-Only Quality Metrics
             metrics_list_text = [
                 ("eval_text_only_rouge1", "ROUGE-1", "#E67E22", "o"),
                 ("eval_text_only_rouge2", "ROUGE-2", "#D35400", "x"),
@@ -3450,14 +2512,10 @@ def _(
 
     class CleanNotebookProgressCallback(TrainerCallback):
         """
-        Pengganti transformers.utils.notebook.NotebookProgressCallback bawaan.
-
-        NotebookProgressCallback bawaan SELALU menambahkan kolom "Validation Loss"
-        (hardcoded di on_train_begin & on_evaluate) terlepas dari apakah key
-        "eval_loss" benar-benar ada di metrics atau tidak. Karena eval kita sudah
-        dipecah jadi Multimodal Loss & Text Only Loss (tidak ada eval_loss
-        gabungan), kolom itu selalu tampil "No log". Callback ini meniru semua
-        behavior aslinya tapi tanpa kolom "Validation Loss" default tersebut.
+        Pengganti NotebookProgressCallback bawaan yang SELALU menambahkan kolom
+        "Validation Loss" hardcoded walau key eval_loss tidak ada (eval kita
+        sudah di-split multimodal & text_only). Meniru semua behavior aslinya
+        tanpa kolom default tersebut.
         """
 
         def __init__(self) -> None:
@@ -3519,7 +2577,6 @@ def _(
 
             self.first_column = "Epoch" if args.eval_strategy == IntervalStrategy.EPOCH else "Step"
 
-            # Tidak seperti bawaan: TIDAK ada default "Validation Loss": "No log" di sini.
             values = {"Training Loss": "No log"}
             for log in reversed(state.log_history):
                 if "loss" in log:
@@ -3547,9 +2604,6 @@ def _(
             for k, v in metrics.items():
                 splits = k.split("_")
                 name = " ".join(part.capitalize() for part in splits[1:])
-                # Catatan: sengaja TIDAK rename name == "Loss" -> "Validation Loss"
-                # seperti versi bawaan, karena kita mau tiap eval dataset punya
-                # kolom sendiri (mis. "Multimodal Loss", "Text Only Loss").
                 values[name] = v
 
             if self.training_tracker is not None:
@@ -3577,6 +2631,7 @@ def _(
             processor: Any,
             eval_samples: list[dict],
             output_dir: str,
+            log_filename: str = "eval_samples.txt",
             eval_every_n_steps: int = 50,
             temperature: float = 0.7,
             top_p: float = 0.9,
@@ -3588,7 +2643,7 @@ def _(
             self.eval_samples = eval_samples
             self.output_dir = output_dir
             self.eval_every_n_steps = eval_every_n_steps
-            self.log_path = os.path.join(output_dir, "eval_samples.txt")
+            self.log_path = os.path.join(output_dir, log_filename)
             self._eot_id = self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
             self._eos_id = self.tokenizer.eos_token_id or 1
             self._stop_ids = list({self._eot_id, self._eos_id})
@@ -3682,8 +2737,6 @@ def _(
             else:
                 model.train()
 
-            # Vision kernels fullgraph=True -> flush cache rekompilasi Dynamo
-            # agar tidak tembus recompile_limit saat training dilanjutkan.
             torch._dynamo.reset()
             gc.collect()
             torch.cuda.empty_cache()
@@ -3700,11 +2753,11 @@ def _(
                 ):
                     print(f"  {line}")
 
-    class VisionHubUploadCallback(TrainerCallback):
+    class JointHubUploadCallback(TrainerCallback):
         def __init__(self, repo_id: str, stage: str, hf_prefix: str, token: str | None = None, output_dir: str | None = None) -> None:
             self.repo_id = repo_id
-            self.stage = stage          # "sft" / "orpo" — dipakai untuk nama file artifact lokal
-            self.hf_prefix = hf_prefix  # "vision" — subfolder di unified repo
+            self.stage = stage          # "sft" / "orpo" — nama file artifact lokal
+            self.hf_prefix = hf_prefix  # "joint" — subfolder di unified repo
             self.token = token
             self.output_dir = output_dir
 
@@ -3721,7 +2774,6 @@ def _(
             local_checkpoint_path = os.path.join(args.output_dir, checkpoint_name)
 
             try:
-                # Ensure the repository is created before uploading checkpoints
                 _api.create_repo(repo_id=self.repo_id, repo_type="model", private=False, exist_ok=True)
                 print(f"\n📤 Uploading {checkpoint_name} to HF {self.hf_prefix}/{self.stage}/...")
                 _api.upload_folder(
@@ -3748,802 +2800,370 @@ def _(
 
     return (
         CleanNotebookProgressCallback,
-        VisionHubUploadCallback,
+        JointHubUploadCallback,
         VisionSampleGenerationCallback,
         VisionTrainingPlotCallback,
     )
 
 
-@app.cell
-def _(load_dataset):
-    # Load dan format dataset untuk SFT
-    print("[VISION] Memuat dataset SFT dari Hugging Face Hub (daruokta/t5gemma2-indonesia-vision-formatted)...")
-    vision_train_dataset = load_dataset("daruokta/t5gemma2-indonesia-vision-formatted", "vision_sft", split="train")
-    print(f"✅ [VISION] SFT Dataset berhasil dimuat dari Hugging Face Hub: {len(vision_train_dataset)} sampel.")
-    return (vision_train_dataset,)
-
-
-@app.cell
-def _(
-    ALL_SUPPRESS_IDS,
-    AutoProcessor,
-    FastVisionModel,
-    SEED,
-    VISION_HF_CHECKPOINT_REPO,
-    VISION_HF_PREFIX,
-    VISION_LOAD_IN_4BIT,
-    VISION_LORA_ALPHA,
-    VISION_LORA_DROPOUT,
-    VISION_LORA_RANK,
-    VISION_MODEL_NAME,
-    VISION_OUTPUT_DIR,
-    VISION_SUBFOLDER,
-    apply_logit_mask,
-    os,
-    vision_current_stage,
-):
-    vision_model = None
-    vision_tokenizer = None
-    vision_processor = None
-
-    if vision_current_stage == "done":
-        print("[VISION] Semua tahapan training selesai. Lewati pemuatan model.")
-    else:
-        _hf_token = os.environ.get("HF_TOKEN")
-
-        # Tentukan sumber pemuatan model
-        if vision_current_stage == "orpo":
-            _model_path = os.path.join(VISION_OUTPUT_DIR, "sft", "final_adapter")
-            if not os.path.exists(_model_path):
-                from huggingface_hub import snapshot_download as _resume_snap
-                print("📥 [VISION] Downloading SFT final adapter dari HF untuk ORPO...")
-                _resume_snap(
-                    repo_id=VISION_HF_CHECKPOINT_REPO,
-                    local_dir=_model_path,
-                    allow_patterns=[f"{VISION_HF_PREFIX}/sft/final_adapter/**"],
-                    token=_hf_token,
-                )
-                _sub_dir = os.path.join(_model_path, VISION_HF_PREFIX, "sft", "final_adapter")
-                if os.path.exists(_sub_dir):
-                    import shutil as _shutil_load
-                    for _item in os.listdir(_sub_dir):
-                        _src = os.path.join(_sub_dir, _item)
-                        _dst = os.path.join(_model_path, _item)
-                        if os.path.exists(_dst):
-                            if os.path.isdir(_dst):
-                                _shutil_load.rmtree(_dst)
-                            else:
-                                os.remove(_dst)
-                        _shutil_load.move(_src, _dst)
-                    _shutil_load.rmtree(os.path.join(_model_path, VISION_HF_PREFIX))
-            print(f"[VISION] Loading SFT model dari adapter path: {_model_path}")
-        else:
-            # SFT: Load base model = hasil cangkok (subfolder "cangkok" di unified repo)
-            _model_path = VISION_MODEL_NAME
-            print(f"[VISION] Loading base model dari {_model_path} (subfolder '{VISION_SUBFOLDER}')...")
-
-        _load_kwargs = dict(
-            model_name=_model_path,
-            load_in_4bit=VISION_LOAD_IN_4BIT,
-            use_gradient_checkpointing="unsloth",
-            token=_hf_token,
-        )
-        if vision_current_stage == "sft" and VISION_SUBFOLDER:
-            _load_kwargs["subfolder"] = VISION_SUBFOLDER
-
-        vision_model, vision_tokenizer = FastVisionModel.from_pretrained(**_load_kwargs)
-
-        # Reset max_length to silence warning about max_new_tokens taking precedence
-        vision_model.config.max_length = None
-        if hasattr(vision_model, "generation_config") and vision_model.generation_config is not None:
-            vision_model.generation_config.max_length = None
-
-        # Load processor dari base model (subfolder cangkok saat sft)
-        _proc_kwargs = dict(token=_hf_token)
-        if vision_current_stage == "sft" and VISION_SUBFOLDER:
-            _proc_kwargs["subfolder"] = VISION_SUBFOLDER
-        vision_processor = AutoProcessor.from_pretrained(VISION_MODEL_NAME, **_proc_kwargs)
-
-        from unsloth.chat_templates import get_chat_template
-        vision_tokenizer = get_chat_template(vision_tokenizer, chat_template="gemma-3")
-        vision_processor.chat_template = vision_tokenizer.chat_template
-        if hasattr(vision_processor, "tokenizer"):
-            vision_processor.tokenizer.chat_template = vision_tokenizer.chat_template
-
-        # Nonaktifkan penambahan bos_token otomatis untuk menghindari bos_token ganda saat inferensi
-        vision_tokenizer.add_bos_token = False
-        if hasattr(vision_processor, "tokenizer"):
-            vision_processor.tokenizer.add_bos_token = False
-
-        # LoRA Config hanya untuk SFT (karena ORPO me-load model yang sudah memiliki LoRA adapter)
-        if vision_current_stage == "sft":
-            print("[VISION] Applying PEFT LoRA (vision_tower=SKIP, projector=FULL FT)...")
-            vision_model = FastVisionModel.get_peft_model(
-                vision_model,
-                finetune_vision_layers=False,      # ⚠️ SKIP vision tower (SigLIP) to avoid Unsloth merge bug
-                finetune_language_layers=True,
-                finetune_attention_modules=True,
-                finetune_mlp_modules=True,
-                modules_to_save=["multi_modal_projector"],  # FULL FT projector
-                r=VISION_LORA_RANK,
-                lora_alpha=VISION_LORA_ALPHA,
-                lora_dropout=VISION_LORA_DROPOUT,
-                bias="none",
-                random_state=SEED,
-                use_rslora=True,
-            )
-        else:
-            print("[VISION] Model has already been loaded with PEFT adapter (from SFT). Skipping get_peft_model.")
-
-        if not hasattr(vision_model.config, "text_config"):
-            type(vision_model.config).text_config = property(lambda self: self.decoder)
-            type(vision_model.config).get_text_config = lambda self, *args, **kwargs: self.decoder
-
-        apply_logit_mask(vision_model, ALL_SUPPRESS_IDS)
-        FastVisionModel.for_training(vision_model)
-    return vision_model, vision_processor, vision_tokenizer
-
-
 # =====================================================================
-# VISION SFT TRAINING CELL
+# JOINT SFT TRAINING CELL
 # =====================================================================
 @app.cell
 def _(
+    ADEMA_BETA1,
+    ADEMA_BETA2,
+    ADEMA_BETA3,
     ALL_SUPPRESS_IDS,
     Any,
     BF16,
     CleanNotebookProgressCallback,
-    Dataset,
-    GrokAdEMAMix,
-    SEED,
+    GROK_ALPHA,
+    GROK_LAMB,
+    JointHubUploadCallback,
+    JointSFTTrainer,
+    MAX_EVAL_GEN_SAMPLES,
+    MAX_SOURCE_LENGTH,
+    MAX_TARGET_LENGTH,
+    MUON_MAX_GRAD_NORM,
+    MUON_MOMENTUM,
+    MUON_NESTEROV,
+    MUON_NS_STEPS,
+    OPTIMIZER_TYPE,
+    OUTPUT_DIR,
+    PROJECTOR_BRANCH,
+    RUN_SFT,
+    SFT_GRADIENT_ACCUMULATION_STEPS,
+    SFT_LABEL_SMOOTHING_FACTOR,
+    SFT_LEARNING_RATE,
+    SFT_LOGGING_STEPS,
+    SFT_LR_MULT_DECODER,
+    SFT_LR_MULT_ENCODER,
+    SFT_LR_MULT_PROJECTOR,
+    SFT_LR_MULT_VISION_TOWER,
+    SFT_LR_SCHEDULER_TYPE,
+    SFT_MAX_GRAD_NORM,
+    SFT_MUON_LR_SCALE,
+    SFT_NEFTUNE_NOISE_ALPHA,
+    SFT_NUM_EPOCHS,
+    SFT_PER_DEVICE_TRAIN_BATCH_SIZE,
+    SFT_PREDICT_WITH_GENERATE,
+    SFT_SAVE_EVAL_STEPS,
+    SFT_SAVE_TOTAL_LIMIT,
+    SFT_WARMUP_STEPS,
+    SFT_WEIGHT_DECAY,
     Seq2SeqTrainingArguments,
     Seq2SeqVisionCollator,
-    VISION_GRADIENT_ACCUMULATION_STEPS,
-    VISION_HF_CHECKPOINT_REPO,
-    VISION_HF_PREFIX,
-    VISION_LABEL_SMOOTHING_FACTOR,
-    VISION_LEARNING_RATE,
-    VISION_LOGGING_STEPS,
-    VISION_LR_SCHEDULER_TYPE,
-    VISION_MAX_SOURCE_LENGTH,
-    VISION_MAX_TARGET_LENGTH,
-    VISION_NEFTUNE_NOISE_ALPHA,
-    VISION_NUM_EPOCHS_SFT,
-    VISION_OPTIM,
-    VISION_OUTPUT_DIR,
-    VISION_PER_DEVICE_TRAIN_BATCH_SIZE,
-    VISION_PREDICT_WITH_GENERATE,
-    VISION_SAVE_TOTAL_LIMIT,
-    VISION_TEST_SIZE,
-    VISION_WARMUP_STEPS,
-    VISION_WEIGHT_DECAY,
-    VisionCustomSeq2SeqTrainer,
-    VisionHubUploadCallback,
+    JOINT_PREFIX,
+    UNIFIED_HF_REPO,
     VisionSampleGenerationCallback,
     VisionTrainingPlotCallback,
-    bertscore_metric,
-    bleu_metric,
     cast,
-    exact_match_metric,
-    format_encoder_from_raw,
+    create_optimizer,
     gc,
     get_scheduler,
-    load_dataset,
-    meteor_metric,
+    joint_eval_multimodal,
+    joint_eval_text_only,
+    joint_sft_eval_datasets,
+    joint_sft_train_dataset,
+    make_compute_metrics,
+    model,
     mo,
-    np,
     os,
-    rouge_metric,
+    pipeline_stage,
+    processor,
+    sft_resume,
     torch,
     traceback,
-    vision_current_stage,
-    vision_model,
-    vision_processor,
-    vision_resume_checkpoint,
     vision_train_dataset,
 ):
-    mo.stop(
-        vision_current_stage != "sft",
-        mo.md("ℹ️ **[VISION] Bukan tahap SFT (atau SFT sudah selesai). Melewati training SFT.**")
-    )
-    mo.stop(
-        vision_train_dataset is None,
-        mo.md("❌ **[VISION] Dataset SFT tidak ditemukan, training SFT dibatalkan.**")
-    )
+    _stage = pipeline_stage
+    if _stage in ("steering", "cangkok"):
+        _stage = "sft"
 
-    # Active memory cleanup from previous attempts
-    vision_sft_trainer = None
-    _optimizer = None
-    _lr_scheduler = None
-    if "vision_model" in globals() and globals()["vision_model"] is not None:
-        try:
-            globals()["vision_model"].zero_grad(set_to_none=True)
-        except Exception:
-            pass
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    # Unroll SFT dataset using ONLY text columns to avoid slow Hugging Face image loading/decoding
-    print("[VISION] Unrolling SFT dataset (text-only pass)...")
-    sft_formatted = []
-    messages_list = vision_train_dataset["messages"]
-    _arrow_images_sft = vision_train_dataset._data.column("images")
-    for _idx_sft, _msgs_sft in enumerate(messages_list):
-        _num_actual_images = len(_arrow_images_sft[_idx_sft])
-        _image_idx = 0
-        clean_context = []
-        for _msg in _msgs_sft:
-            _role_sft = _msg["role"]
-            _content_sft = _msg["content"]
-            if _role_sft == "user" and "📷" in _content_sft:
-                _num_images_sft = _content_sft.count("📷")
-                _text_content_sft = _content_sft.replace("📷", "").strip()
-                clean_content = []
-                for _ in range(_num_images_sft):
-                    if _image_idx < _num_actual_images:
-                        clean_content.append({"type": "image"})
-                        _image_idx += 1
-                if _text_content_sft:
-                    clean_content.append({"type": "text", "text": _text_content_sft})
-                clean_context.append({"role": _role_sft, "content": clean_content})
-            else:
-                clean_context.append({"role": _role_sft, "content": [{"type": "text", "text": _content_sft}]})
-
-        for i, msg in enumerate(clean_context):
-            if msg["role"] != "assistant":
-                continue
-            context = clean_context[:i]
-            if not context:
-                continue
-
-            prompt_text = vision_processor.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
-
-            # Count image blocks in context up to this turn
-            _num_context_images = 0
-            for _m in context:
-                for _b in _m["content"]:
-                    if isinstance(_b, dict) and _b.get("type") == "image":
-                        _num_context_images += 1
-
-            target_text = ""
-            if isinstance(msg["content"], list):
-                for b in msg["content"]:
-                    if isinstance(b, dict) and "text" in b:
-                        target_text = b["text"]
-            else:
-                target_text = msg["content"]
-
-            if target_text:
-                sft_formatted.append({
-                    "prompt_text": prompt_text,
-                    "target_text": target_text,
-                    "dataset_idx": _idx_sft,
-                    "image_indices": list(range(_num_context_images))
-                })
-    print(f"✅ [VISION] Vision SFT samples unrolled: {len(sft_formatted)} samples.")
-
-    # Load and format text retention data to prevent catastrophic forgetting
-    # Select complete conversations by chat_idx so turns are never cut off in the middle
-    print("[VISION] Memuat text retention dataset (100 percakapan utuh chat_sft + 100 IndoQA)...")
-    _text_retention_formatted = []
-    try:
-        _ret_chat_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "chat_sft", split="train")
-        _ret_indoqa_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "indoqa_sft", split="train")
-
-        _chat_rows = [dict(_r) for _r in _ret_chat_ds]
-        _indoqa_rows = [dict(_r) for _r in _ret_indoqa_ds]
-
-        import random as _rng_ret
-        _rng_ret.seed(SEED)
-
-        # Group chat_sft rows by chat_idx to keep multiturn conversations intact
-        _chat_groups = {}
-        for _r in _chat_rows:
-            _c_idx = _r.get("chat_idx", _r.get("id"))
-            if _c_idx not in _chat_groups:
-                _chat_groups[_c_idx] = []
-            _chat_groups[_c_idx].append(_r)
-
-        # Shuffle conversation keys and pick 100 complete conversations
-        _group_keys = list(_chat_groups.keys())
-        _rng_ret.shuffle(_group_keys)
-        _selected_chat_keys = _group_keys[:min(100, len(_group_keys))]
-
-        _selected_ret_rows = []
-        for _k in _selected_chat_keys:
-            _selected_ret_rows.extend(_chat_groups[_k])
-
-        # Pick 100 random samples from IndoQA (single turn)
-        _rng_ret.shuffle(_indoqa_rows)
-        _selected_ret_rows.extend(_indoqa_rows[:min(100, len(_indoqa_rows))])
-
-        for _row in _selected_ret_rows:
-            _pt = format_encoder_from_raw(_row["input"])
-            _tt = _row["target"]
-            _text_retention_formatted.append({
-                "prompt_text": _pt,
-                "target_text": _tt,
-                "dataset_idx": -1,
-                "image_indices": [],
-                "images": []
-            })
-        print(f"✅ [VISION] Ditambahkan {len(_text_retention_formatted)} sampel retensi teks utuh (dari {len(_selected_chat_keys)} percakapan chat + 100 IndoQA).")
-    except Exception as e:
-        print(f"⚠️ [VISION] Gagal memuat dataset retensi teks: {e}")
-
-    sft_formatted.extend(_text_retention_formatted)
-    import random as _rng_mix
-    _rng_mix.seed(SEED)
-    _rng_mix.shuffle(sft_formatted)
-
-    sft_dataset = Dataset.from_list(sft_formatted)
-    print(f"✅ [VISION] Combined SFT dataset (Vision + Text Retention): {len(sft_dataset)} samples")
-
-    # Splitting Train & Validation
-    split_ds = sft_dataset.train_test_split(test_size=VISION_TEST_SIZE, seed=SEED)
-    vision_sft_train_dataset = split_ds["train"]
-    # Limit evaluation dataset to 30 samples to avoid CUDA OOM during predict_with_generate
-    vision_sft_eval_dataset = split_ds["test"].select(range(min(len(split_ds["test"]), 30)))
-    print(f"  [VISION] SFT Train size: {len(vision_sft_train_dataset)} | SFT Eval size: {len(vision_sft_eval_dataset)}")
-
-    # Load and format text-only validation dataset
-    print("[VISION] Loading text-only SFT validation dataset from HF Hub...")
-    _text_only_eval_dataset = None
-    try:
-        _val_chat_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "chat_sft", split="validation")
-        _val_indoqa_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "indoqa_sft", split="validation")
-        _val_chat_samples = [dict(_row) for _row in _val_chat_ds]
-        _val_indoqa_samples = [dict(_row) for _row in _val_indoqa_ds]
-
-        import random as _rng_sft
-        _raw_text_only_samples = _val_chat_samples + _val_indoqa_samples
-        _rng_sft.seed(42)
-        _rng_sft.shuffle(_raw_text_only_samples)
-        # Limit text-only evaluation to 30 samples to avoid CUDA OOM during predict_with_generate
-        _raw_text_only_samples = _raw_text_only_samples[:30]
-
-        _text_only_formatted = []
-        for _row in _raw_text_only_samples:
-            _pt = format_encoder_from_raw(_row["input"])
-            _tt = _row["target"]
-            _text_only_formatted.append({
-                "prompt_text": _pt,
-                "images": [],
-                "target_text": _tt
-            })
-        _text_only_eval_dataset = Dataset.from_list(_text_only_formatted)
-        print(f"  [VISION] Text-Only Eval size: {len(_text_only_eval_dataset)}")
-    except Exception as e:
-        print(f"⚠️ [VISION] Gagal memuat dataset validasi teks untuk SFT: {e}")
-
-    sft_eval_datasets = {"multimodal": vision_sft_eval_dataset}
-    if _text_only_eval_dataset is not None:
-        sft_eval_datasets["text_only"] = _text_only_eval_dataset
-
-    vision_sft_output_dir = os.path.join(VISION_OUTPUT_DIR, "sft")
-    sft_collator = Seq2SeqVisionCollator(vision_processor, VISION_MAX_SOURCE_LENGTH, VISION_MAX_TARGET_LENGTH, vision_train_dataset)
-
-    # Setup qualitative generation samples (similar to V6 text-only)
-    _sft_val_rows = list(vision_sft_eval_dataset)
-    _n_eval_gen = min(len(_sft_val_rows), 20)
-    _eval_generation_samples = []
-    for _item_sft in _sft_val_rows[:_n_eval_gen]:
-        _full_imgs = vision_train_dataset[_item_sft["dataset_idx"]]["images"] if "dataset_idx" in _item_sft else []
-        _indices = _item_sft.get("image_indices", [])
-        _subset_imgs = [_full_imgs[i] for i in _indices if i < len(_full_imgs)]
-        _eval_generation_samples.append({
-            "prompt_text": _item_sft["prompt_text"],
-            "target_text": _item_sft["target_text"],
-            "images": _subset_imgs
-        })
-
-    # Define compute metrics
-    def _compute_metrics(eval_preds):
-        metrics = {}
-
-        if rouge_metric is None and bleu_metric is None:
-            return metrics
-        preds, labels = eval_preds
-        if isinstance(preds, tuple):
-            preds = preds[0]
-        tok = cast(Any, vision_processor.tokenizer)
-
-        if preds.ndim == 3:
-            preds = preds.argmax(axis=-1)
-
-        labels = np.where(labels != -100, labels, tok.pad_token_id)
-        preds = np.where(preds != -100, preds, tok.pad_token_id)
-        decoded_preds = tok.batch_decode(preds, skip_special_tokens=True)
-        decoded_labels = tok.batch_decode(labels, skip_special_tokens=True)
-        decoded_preds = [pred.strip() for pred in decoded_preds]
-        decoded_labels = [label.strip() for label in decoded_labels]
-
-        if rouge_metric is not None:
-            try:
-                result = cast(Any, rouge_metric).compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=False)
-                if result is not None:
-                    for key, value in result.items():
-                        metrics[key] = value * 100
-            except Exception as e:
-                print(f"Error during ROUGE: {e}")
-
-        if bleu_metric is not None:
-            try:
-                formatted_labels = [[label] for label in decoded_labels]
-                bleu_result = cast(Any, bleu_metric).compute(predictions=decoded_preds, references=formatted_labels)
-                if bleu_result is not None and "bleu" in bleu_result:
-                    metrics["bleu"] = bleu_result["bleu"] * 100
-            except Exception as e:
-                print(f"Error during BLEU: {e}")
-
-        if exact_match_metric is not None:
-            try:
-                em_result = cast(Any, exact_match_metric).compute(predictions=decoded_preds, references=decoded_labels)
-                if em_result is not None and "exact_match" in em_result:
-                    metrics["exact_match"] = em_result["exact_match"] * 100
-            except Exception as e:
-                print(f"Error during Exact Match: {e}")
-
-        if bertscore_metric is not None:
-            try:
-                bertscore_result = cast(Any, bertscore_metric).compute(
-                    predictions=decoded_preds, references=decoded_labels,
-                    model_type="google/embeddinggemma-300m", num_layers=12, lang="id"
-                )
-                if bertscore_result is not None and "f1" in bertscore_result:
-                    metrics["bertscore_f1"] = np.mean(bertscore_result["f1"]) * 100
-            except Exception as e:
-                print(f"Error during BERTScore: {e}")
-
-        if meteor_metric is not None:
-            try:
-                meteor_result = cast(Any, meteor_metric).compute(predictions=decoded_preds, references=decoded_labels)
-                if meteor_result is not None and "meteor" in meteor_result:
-                    metrics["meteor"] = meteor_result["meteor"] * 100
-            except Exception as e:
-                print(f"Error during METEOR: {e}")
-
-        return metrics
-
-    # Instantiate GrokAdEMAMix Optimizer with split learning rates
-    print("[VISION] Menggunakan optimizer: GrokAdEMAMix (Split LR: Encoder=0.2x, Decoder=0.2x, Projector=0.05x, VisionTower=0.0x)")
-    _encoder_params = []
-    _decoder_params = []
-    _projector_params = []
-    _vision_tower_params = []
-    for _name, _param in vision_model.named_parameters():
-        if _param.requires_grad:
-            if "multi_modal_projector" in _name:
-                _projector_params.append(_param)
-            elif "vision_tower" in _name:
-                _vision_tower_params.append(_param)
-            elif "encoder" in _name:
-                _encoder_params.append(_param)
-            elif "decoder" in _name:
-                _decoder_params.append(_param)
-            else:
-                _decoder_params.append(_param)
-
-    _optimizer = GrokAdEMAMix([
-        {"params": _encoder_params, "lr": VISION_LEARNING_RATE * 0.2},
-        {"params": _decoder_params, "lr": VISION_LEARNING_RATE * 0.2},
-        {"params": _projector_params, "lr": VISION_LEARNING_RATE * 0.05},
-        {"params": _vision_tower_params, "lr": 0.0}
-    ], weight_decay=VISION_WEIGHT_DECAY, grok_alpha=2.0, grok_lamb=0.98)
-
-    # Calculate steps for Cosine Scheduler
-    _num_update_steps_per_epoch = max(
-        1, len(vision_sft_train_dataset) // (VISION_PER_DEVICE_TRAIN_BATCH_SIZE * VISION_GRADIENT_ACCUMULATION_STEPS)
-    )
-    _max_steps = _num_update_steps_per_epoch * VISION_NUM_EPOCHS_SFT
-
-    _lr_scheduler = get_scheduler(
-        name=VISION_LR_SCHEDULER_TYPE,
-        optimizer=_optimizer,
-        num_warmup_steps=VISION_WARMUP_STEPS,
-        num_training_steps=_max_steps,
-    )
-
-    # Callbacks (same as V6 text-only)
-    _bad_words_ids = [
-        [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, vision_model).config.vocab_size
-    ]
-    _plot_callback = VisionTrainingPlotCallback(output_dir=vision_sft_output_dir)
-    _progress_callback = CleanNotebookProgressCallback()
-
-    _sample_callback_multimodal = VisionSampleGenerationCallback(
-        processor=vision_processor,
-        eval_samples=_eval_generation_samples,
-        output_dir=vision_sft_output_dir,
-        eval_every_n_steps=50,
-        temperature=0.7,
-        top_p=0.9,
-        repetition_penalty=1.2,
-        bad_words_ids=_bad_words_ids,
-    )
-    _sample_callback_multimodal.log_path = os.path.join(vision_sft_output_dir, "sft_eval_samples_multimodal.txt")
-
-    # Setup qualitative generation samples for text-only validation
-    _text_only_val_rows = list(_text_only_eval_dataset) if _text_only_eval_dataset is not None else []
-    _n_text_only_eval_gen = min(len(_text_only_val_rows), 20)
-    _text_only_eval_generation_samples = _text_only_val_rows[:_n_text_only_eval_gen]
-
-    _sample_callback_text_only = VisionSampleGenerationCallback(
-        processor=vision_processor,
-        eval_samples=_text_only_eval_generation_samples,
-        output_dir=vision_sft_output_dir,
-        eval_every_n_steps=50,
-        temperature=0.7,
-        top_p=0.9,
-        repetition_penalty=1.2,
-        bad_words_ids=_bad_words_ids,
-    )
-    _sample_callback_text_only.log_path = os.path.join(vision_sft_output_dir, "sft_eval_samples_text_only.txt")
-
-    _hub_callback = VisionHubUploadCallback(
-        repo_id=VISION_HF_CHECKPOINT_REPO,
-        stage="sft",
-        hf_prefix=VISION_HF_PREFIX,
-        token=os.environ.get("HF_TOKEN"),
-        output_dir=vision_sft_output_dir,
-    )
-
-    print("[VISION] Starting VisionCustomSeq2SeqTrainer for SFT...")
-    vision_sft_trainer = VisionCustomSeq2SeqTrainer(
-        suppress_ids=ALL_SUPPRESS_IDS,
-        model=vision_model,
-        args=Seq2SeqTrainingArguments(
-            per_device_train_batch_size=VISION_PER_DEVICE_TRAIN_BATCH_SIZE,
-            per_device_eval_batch_size=1,  # Eval one sample at a time to prevent OOM during generate
-            gradient_accumulation_steps=VISION_GRADIENT_ACCUMULATION_STEPS,
-            eval_accumulation_steps=1,  # Move predictions to CPU immediately after each batch
-            learning_rate=VISION_LEARNING_RATE,
-            num_train_epochs=VISION_NUM_EPOCHS_SFT,
-            warmup_steps=VISION_WARMUP_STEPS,
-            weight_decay=VISION_WEIGHT_DECAY,
-            max_grad_norm=5.0,  # Clip gradients to prevent grad norm spikes
-            lr_scheduler_type=VISION_LR_SCHEDULER_TYPE,
-            logging_steps=VISION_LOGGING_STEPS,
-            save_strategy="steps",
-            save_steps=50,
-            save_total_limit=VISION_SAVE_TOTAL_LIMIT,
-            output_dir=vision_sft_output_dir,
-            remove_unused_columns=False,
-            fp16=False,
-            bf16=BF16,
-            optim=VISION_OPTIM,
-            label_smoothing_factor=VISION_LABEL_SMOOTHING_FACTOR,
-            neftune_noise_alpha=VISION_NEFTUNE_NOISE_ALPHA,
-            gradient_checkpointing=True,
-            eval_strategy="steps",
-            eval_steps=50,
-            report_to="none",
-            predict_with_generate=VISION_PREDICT_WITH_GENERATE,
-            generation_max_length=VISION_MAX_TARGET_LENGTH,
-        ),
-        train_dataset=vision_sft_train_dataset,
-        eval_dataset=sft_eval_datasets,
-        data_collator=sft_collator,
-        optimizers=(_optimizer, _lr_scheduler),
-        compute_metrics=_compute_metrics,
-        callbacks=[_plot_callback, _progress_callback, _sample_callback_multimodal, _sample_callback_text_only, _hub_callback],
-    )
-
-    # Buang NotebookProgressCallback bawaan transformers (kalau ada) supaya
-    # tabel progress bawaan (dengan kolom "Validation Loss" yang selalu "No log")
-    # tidak ikut ter-render berdampingan dengan CleanNotebookProgressCallback.
-    from transformers.utils.notebook import NotebookProgressCallback as _HFNotebookProgressCallback
-    vision_sft_trainer.remove_callback(_HFNotebookProgressCallback)
-
-    # === RESUME FROM HF CHECKPOINT ===
-    _resume_from = None
-    if vision_resume_checkpoint:
-        try:
-            from huggingface_hub import snapshot_download as _resume_snap
-            from huggingface_hub import HfApi as _ResumeApi
-
-            _api = _ResumeApi(token=os.environ.get("HF_TOKEN"))
-            _files = _api.list_repo_files(repo_id=VISION_HF_CHECKPOINT_REPO)
-
-            _ckpts = list(set([f.split('/')[2] for f in _files if f.startswith(f"{VISION_HF_PREFIX}/sft/checkpoint-")]))
-            if _ckpts:
-                _ckpts.sort(key=lambda x: int(x.split('-')[1]))
-                _latest_ckpt = _ckpts[-1]
-            else:
-                _latest_ckpt = "checkpoint-*"
-
-            print(f"\n📥 [VISION] Downloading {_latest_ckpt} (sft) dari HF untuk resume...")
-            _resume_snap(
-                repo_id=VISION_HF_CHECKPOINT_REPO,
-                local_dir=vision_sft_output_dir,
-                allow_patterns=[f"{VISION_HF_PREFIX}/sft/{_latest_ckpt}/**"],
-                token=os.environ.get("HF_TOKEN"),
-            )
-            _sub_dir = os.path.join(vision_sft_output_dir, VISION_HF_PREFIX, "sft")
-            if os.path.exists(_sub_dir):
-                import shutil as _shutil_SFT
-                for _item in os.listdir(_sub_dir):
-                    _src = os.path.join(_sub_dir, _item)
-                    _dst = os.path.join(vision_sft_output_dir, _item)
-                    if os.path.isdir(_src) and _item.startswith("checkpoint-"):
-                        if os.path.exists(_dst):
-                            _shutil_SFT.rmtree(_dst)
-                        _shutil_SFT.move(_src, _dst)
-                _shutil_SFT.rmtree(os.path.join(vision_sft_output_dir, VISION_HF_PREFIX))
-
-            _checkpoints = sorted([
-                d for d in os.listdir(vision_sft_output_dir)
-                if d.startswith("checkpoint-") and os.path.isdir(os.path.join(vision_sft_output_dir, d))
-            ])
-            if _checkpoints:
-                _resume_from = True
-                print(f"✅ [VISION] Ditemukan {len(_checkpoints)} checkpoint(s). Resume dari yang terbaru!")
-            else:
-                print("⚠️ [VISION] Tidak ada checkpoint valid ditemukan. Mulai dari awal.")
-        except Exception as e:
-            print(f"⚠️ [VISION] Gagal download checkpoint: {e}. Mulai dari awal.")
-
-    vision_sft_result = None
-    try:
-        vision_sft_result = vision_sft_trainer.train(resume_from_checkpoint=_resume_from)
-        print(f"✅ [VISION] SFT selesai! Loss: {vision_sft_result.training_loss:.4f}")
-
-        # Save final SFT model & processor
-        vision_sft_final_path = os.path.join(vision_sft_output_dir, "final_adapter")
-        print(f"💾 [VISION] Saving final SFT adapter ke {vision_sft_final_path}...")
-        vision_sft_trainer.save_model(vision_sft_final_path)
-        vision_processor.save_pretrained(vision_sft_final_path)
-
-        # Upload final adapter to HF Hub
-        if os.environ.get("HF_TOKEN"):
-            try:
-                from huggingface_hub import HfApi as _HfApi_SFT
-                _final_api = _HfApi_SFT(token=os.environ.get("HF_TOKEN"))
-                _final_api.create_repo(repo_id=VISION_HF_CHECKPOINT_REPO, repo_type="model", private=False, exist_ok=True)
-                print("📤 [VISION] Uploading final SFT adapter ke HF Hub...")
-                _final_api.upload_folder(
-                    folder_path=vision_sft_final_path,
-                    repo_id=VISION_HF_CHECKPOINT_REPO,
-                    path_in_repo=f"{VISION_HF_PREFIX}/sft/final_adapter",
-                    repo_type="model",
-                )
-                print("✅ [VISION] Upload final SFT adapter sukses!")
-            except Exception as e:
-                print(f"⚠️ [VISION] Gagal upload final SFT adapter: {e}")
-    except Exception as e:
-        print(f"❌ [VISION] SFT gagal: {e}")
-        traceback.print_exc()
-    finally:
-        vision_sft_trainer = None
-        _optimizer = None
-        _lr_scheduler = None
-        if "vision_model" in globals() and globals()["vision_model"] is not None:
-            try:
-                globals()["vision_model"].zero_grad(set_to_none=True)
-            except Exception:
-                pass
+    _should_run = RUN_SFT and _stage == "sft" and model is not None
+    if not _should_run:
+        print(
+            f"⏭️ [JOINT-SFT] Dilewati — RUN_SFT={RUN_SFT}, stage efektif=`{_stage}`, model={'OK' if model is not None else 'None'}."
+        )
+    if _should_run:
+        # Cleanup sisa memori
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+        joint_sft_output_dir = os.path.join(OUTPUT_DIR, JOINT_PREFIX, "sft")
+        os.makedirs(joint_sft_output_dir, exist_ok=True)
+        print(f"[JOINT-SFT] Output dir: {joint_sft_output_dir}")
+        print(f"[JOINT-SFT] Train: {len(joint_sft_train_dataset)} | Eval sets: {list(joint_sft_eval_datasets.keys())}")
+
+        # ---- Eval generation samples (multimodal + text-only) ----
+        _mm_rows = list(joint_eval_multimodal) if joint_eval_multimodal is not None else []
+        _mm_gen_samples = []
+        for _item in _mm_rows[:MAX_EVAL_GEN_SAMPLES]:
+            _full_imgs = vision_train_dataset[_item["dataset_idx"]]["images"] if _item.get("dataset_idx", -1) >= 0 else []
+            _indices = _item.get("image_indices", [])
+            _subset = [_full_imgs[i] for i in _indices if i < len(_full_imgs)]
+            _mm_gen_samples.append({
+                "prompt_text": _item["prompt_text"],
+                "target_text": _item["target_text"],
+                "images": _subset,
+            })
+        _to_rows = list(joint_eval_text_only) if joint_eval_text_only is not None else []
+        _to_gen_samples = [
+            {"prompt_text": r["prompt_text"], "target_text": r["target_text"], "images": []}
+            for r in _to_rows[:MAX_EVAL_GEN_SAMPLES]
+        ]
+
+        # ---- Optimizer + scheduler ----
+        _optimizer = create_optimizer(
+            model,
+            base_lr=SFT_LEARNING_RATE,
+            weight_decay=SFT_WEIGHT_DECAY,
+            lr_mults={
+                "encoder": SFT_LR_MULT_ENCODER,
+                "decoder": SFT_LR_MULT_DECODER,
+                "projector": SFT_LR_MULT_PROJECTOR,
+                "vision_tower": SFT_LR_MULT_VISION_TOWER,
+            },
+            opt_type=OPTIMIZER_TYPE,
+            grok_alpha=GROK_ALPHA,
+            gmar_lamb=GROK_LAMB,
+            adema_betas=(ADEMA_BETA1, ADEMA_BETA2),
+            adema_beta3=ADEMA_BETA3,
+            muon_momentum=MUON_MOMENTUM,
+            muon_ns_steps=MUON_NS_STEPS,
+            muon_nesterov=MUON_NESTEROV,
+            muon_max_grad_norm=MUON_MAX_GRAD_NORM,
+            muon_lr_scale=SFT_MUON_LR_SCALE,
+            projector_branch=PROJECTOR_BRANCH,
+        )
+
+        _num_update_steps = max(
+            1, len(joint_sft_train_dataset) // (SFT_PER_DEVICE_TRAIN_BATCH_SIZE * SFT_GRADIENT_ACCUMULATION_STEPS)
+        )
+        _max_steps = _num_update_steps * SFT_NUM_EPOCHS
+
+        if _optimizer is not None:
+            _lr_scheduler = get_scheduler(
+                name=SFT_LR_SCHEDULER_TYPE,
+                optimizer=_optimizer,
+                num_warmup_steps=SFT_WARMUP_STEPS,
+                num_training_steps=_max_steps,
+            )
+            _optimizers = (_optimizer, _lr_scheduler)
+            _optim_str = "adamw_torch"  # diabaikan — optimizer custom dipasok eksplisit
+            print(f"[JOINT-SFT] Optimizer: {type(_optimizer).__name__} | max_steps={_max_steps}")
+        else:
+            _optimizers = ()
+            _optim_str = "paged_adamw_8bit"
+            print("[JOINT-SFT] Optimizer: paged_adamw_8bit (dibangun Trainer)")
+
+        # ---- Callbacks ----
+        _bad_words_ids = [
+            [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, model).config.vocab_size
+        ]
+        _plot_cb = VisionTrainingPlotCallback(output_dir=joint_sft_output_dir)
+        _progress_cb = CleanNotebookProgressCallback()
+        _smp_mm = VisionSampleGenerationCallback(
+            processor=processor,
+            eval_samples=_mm_gen_samples,
+            output_dir=joint_sft_output_dir,
+            log_filename="sft_eval_samples_multimodal.txt",
+            eval_every_n_steps=SFT_SAVE_EVAL_STEPS,
+            temperature=0.7, top_p=0.9, repetition_penalty=1.2,
+            bad_words_ids=_bad_words_ids,
+        )
+        _smp_to = VisionSampleGenerationCallback(
+            processor=processor,
+            eval_samples=_to_gen_samples,
+            output_dir=joint_sft_output_dir,
+            log_filename="sft_eval_samples_text_only.txt",
+            eval_every_n_steps=SFT_SAVE_EVAL_STEPS,
+            temperature=0.7, top_p=0.9, repetition_penalty=1.2,
+            bad_words_ids=_bad_words_ids,
+        )
+        _hub_cb = JointHubUploadCallback(
+            repo_id=UNIFIED_HF_REPO,
+            stage="sft",
+            hf_prefix=JOINT_PREFIX,
+            token=os.environ.get("HF_TOKEN"),
+            output_dir=joint_sft_output_dir,
+        )
+
+        sft_collator = Seq2SeqVisionCollator(processor, MAX_SOURCE_LENGTH, MAX_TARGET_LENGTH, vision_train_dataset)
+
+        joint_sft_trainer = JointSFTTrainer(
+            suppress_ids=ALL_SUPPRESS_IDS,
+            model=model,
+            args=Seq2SeqTrainingArguments(
+                output_dir=joint_sft_output_dir,
+                per_device_train_batch_size=SFT_PER_DEVICE_TRAIN_BATCH_SIZE,
+                per_device_eval_batch_size=1,
+                gradient_accumulation_steps=SFT_GRADIENT_ACCUMULATION_STEPS,
+                eval_accumulation_steps=1,
+                learning_rate=SFT_LEARNING_RATE,
+                num_train_epochs=SFT_NUM_EPOCHS,
+                warmup_steps=SFT_WARMUP_STEPS,
+                weight_decay=SFT_WEIGHT_DECAY,
+                max_grad_norm=SFT_MAX_GRAD_NORM,
+                lr_scheduler_type=SFT_LR_SCHEDULER_TYPE,
+                logging_steps=SFT_LOGGING_STEPS,
+                save_strategy="steps",
+                save_steps=SFT_SAVE_EVAL_STEPS,
+                save_total_limit=SFT_SAVE_TOTAL_LIMIT,
+                remove_unused_columns=False,
+                fp16=False,
+                bf16=BF16,
+                optim=_optim_str,
+                label_smoothing_factor=SFT_LABEL_SMOOTHING_FACTOR,
+                neftune_noise_alpha=SFT_NEFTUNE_NOISE_ALPHA,
+                gradient_checkpointing=True,
+                eval_strategy="steps",
+                eval_steps=SFT_SAVE_EVAL_STEPS,
+                report_to="none",
+                predict_with_generate=SFT_PREDICT_WITH_GENERATE,
+                generation_max_length=MAX_TARGET_LENGTH,
+            ),
+            train_dataset=joint_sft_train_dataset,
+            eval_dataset=joint_sft_eval_datasets,
+            data_collator=sft_collator,
+            optimizers=_optimizers,
+            compute_metrics=make_compute_metrics(processor),
+            callbacks=[_plot_cb, _progress_cb, _smp_mm, _smp_to, _hub_cb],
+        )
+        from transformers.utils.notebook import NotebookProgressCallback as _HFNPC
+        joint_sft_trainer.remove_callback(_HFNPC)
+
+        # ---- Resume dari HF checkpoint ----
+        _resume_from = None
+        if sft_resume:
+            try:
+                from huggingface_hub import snapshot_download as _resume_snap
+                from huggingface_hub import HfApi as _ResumeApi
+
+                _api = _ResumeApi(token=os.environ.get("HF_TOKEN"))
+                _files = _api.list_repo_files(repo_id=UNIFIED_HF_REPO)
+
+                _ckpt_prefix = f"{JOINT_PREFIX}/sft/checkpoint-"
+                _ckpts = list(set([f.split('/')[2] for f in _files if f.startswith(_ckpt_prefix)]))
+                if _ckpts:
+                    _ckpts.sort(key=lambda x: int(x.split('-')[1]))
+                    _latest_ckpt = _ckpts[-1]
+                else:
+                    _latest_ckpt = "checkpoint-*"
+
+                print(f"\n📥 [JOINT-SFT] Downloading {_latest_ckpt} untuk resume...")
+                _resume_snap(
+                    repo_id=UNIFIED_HF_REPO,
+                    local_dir=joint_sft_output_dir,
+                    allow_patterns=[f"{JOINT_PREFIX}/sft/{_latest_ckpt}/**"],
+                    token=os.environ.get("HF_TOKEN"),
+                )
+                _sub_dir = os.path.join(joint_sft_output_dir, JOINT_PREFIX, "sft")
+                if os.path.exists(_sub_dir):
+                    import shutil as _shutil_r
+                    for _item in os.listdir(_sub_dir):
+                        _src = os.path.join(_sub_dir, _item)
+                        _dst = os.path.join(joint_sft_output_dir, _item)
+                        if os.path.isdir(_src) and _item.startswith("checkpoint-"):
+                            if os.path.exists(_dst):
+                                _shutil_r.rmtree(_dst)
+                            _shutil_r.move(_src, _dst)
+                    _shutil_r.rmtree(os.path.join(joint_sft_output_dir, JOINT_PREFIX))
+
+                _checkpoints = sorted([
+                    d for d in os.listdir(joint_sft_output_dir)
+                    if d.startswith("checkpoint-") and os.path.isdir(os.path.join(joint_sft_output_dir, d))
+                ])
+                if _checkpoints:
+                    _resume_from = True
+                    print(f"✅ [JOINT-SFT] {len(_checkpoints)} checkpoint(s) ditemukan — resume!")
+                else:
+                    print("⚠️ [JOINT-SFT] Tidak ada checkpoint valid — mulai dari awal.")
+            except Exception as e:
+                print(f"⚠️ [JOINT-SFT] Gagal download checkpoint: {e}. Mulai dari awal.")
+
+        # ---- Train ----
+        print("\n🚀 [JOINT-SFT] Starting JOINT training (vision + teks)...")
+        joint_sft_trainer.train(resume_from_checkpoint=_resume_from)
+
+        # ---- Save & upload final adapter ----
+        _final_path = os.path.join(joint_sft_output_dir, "final_adapter")
+        print(f"\n💾 [JOINT-SFT] Saving final adapter ke {_final_path}...")
+        joint_sft_trainer.save_model(_final_path)
+        processor.save_pretrained(_final_path)
+        try:
+            from huggingface_hub import HfApi as _FinalApi
+            _final_api = _FinalApi(token=os.environ.get("HF_TOKEN"))
+            _final_api.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
+            _final_api.upload_folder(
+                folder_path=_final_path,
+                repo_id=UNIFIED_HF_REPO,
+                path_in_repo=f"{JOINT_PREFIX}/sft/final_adapter",
+                repo_type="model",
+            )
+            print("✅ [JOINT-SFT] Final adapter ter-upload ke joint/sft/final_adapter!")
+        except Exception as e:
+            print(f"⚠️ [JOINT-SFT] Upload final adapter gagal: {e}")
+
     return
 
 
-# =====================================================================
-# VISION ORPO TRAINING CELL
-# =====================================================================
+# #####################################################################
+#   PHASE 2 — JOINT ORPO (vision_orpo + chat_orpo, ε=0)
+# #####################################################################
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ---
+    # 🎯 Phase 2 — JOINT ORPO (Preference Optimization)
+    Dataset **vision_orpo** + **chat_orpo** dicampur (rasio `JOINT_TEXT_RATIO_ORPO`).
+    Loss = `CE(chosen)` + `β · OR-loss`. **Label smoothing WAJIB 0** saat ORPO
+    (smoothing merusak kurva odds-ratio). Forward di-split encoder→decoder
+    (hemat ~40% VRAM, mencegah OOM dual forward chosen/rejected).
+    """)
+    return
+
+
 @app.cell
 def _(
-    ALL_SUPPRESS_IDS,
-    Any,
-    BF16,
-    CleanNotebookProgressCallback,
-    Dataset,
-    GrokAdEMAMix,
+    DATASET_TEXT_REPO,
+    DATASET_VISION_REPO,
+    JOINT_TEXT_RATIO_ORPO,
+    MAX_EVAL_SAMPLES,
+    SAMPLE_TRAIN_TEXT_ORPO,
+    SAMPLE_TRAIN_VISION_ORPO,
     SEED,
-    Seq2SeqTrainingArguments,
-    VISION_GRADIENT_ACCUMULATION_STEPS,
-    VISION_HF_CHECKPOINT_REPO,
-    VISION_HF_PREFIX,
-    VISION_LEARNING_RATE,
-    VISION_LOGGING_STEPS,
-    VISION_LR_SCHEDULER_TYPE,
-    VISION_MAX_SOURCE_LENGTH,
-    VISION_MAX_TARGET_LENGTH,
-    VISION_NUM_EPOCHS_ORPO,
-    VISION_OPTIM,
-    VISION_ORPO_BETA,
-    VISION_OUTPUT_DIR,
-    VISION_PER_DEVICE_TRAIN_BATCH_SIZE,
-    VISION_PREDICT_WITH_GENERATE,
-    VISION_SAVE_TOTAL_LIMIT,
+    TEXT_ORPO_CONFIG,
+    VISION_ORPO_CONFIG,
     VISION_TEST_SIZE,
-    VISION_WARMUP_STEPS,
-    VISION_WEIGHT_DECAY,
-    VisionHubUploadCallback,
-    VisionORPOCollator,
-    VisionORPOTrainer,
-    VisionSampleGenerationCallback,
-    VisionTrainingPlotCallback,
-    bertscore_metric,
-    bleu_metric,
-    cast,
-    exact_match_metric,
-    format_encoder_from_raw,
-    gc,
-    get_scheduler,
+    Dataset,
     load_dataset,
-    meteor_metric,
+    load_hf_samples,
     mo,
-    np,
-    os,
-    parse_orpo_prompt_to_messages,
-    rouge_metric,
+    processor,
+    random,
+    text_orpo_to_joint,
     torch,
-    traceback,
-    vision_current_stage,
-    vision_model,
-    vision_processor,
-    vision_resume_checkpoint,
 ):
-    # Re-detect pipeline stage FRESH dari HF Hub. Cell deteksi stage awal hanya
-    # jalan sekali di awal notebook dan nilainya di-cache marimo. Saat notebook
-    # mulai, `vision/sft/final_adapter/` belum ada -> vision_current_stage = "sft".
-    # Setelah SFT selesai & upload, cell deteksi itu TIDAK re-run, sehingga
-    # vision_current_stage tetap stale "sft" dan mo.stop(... != "orpo") SALAH
-    # me-skip ORPO tepat setelah SFT selesai dalam sesi yang sama. Deteksi ulang
-    # di sini memastikan ORPO jalan berdasarkan state repo yang sebenarnya.
-    from huggingface_hub import HfApi as _OrpoStageApi
-    _fresh_stage = vision_current_stage
-    _fresh_resume = vision_resume_checkpoint
-    try:
-        _stage_api = _OrpoStageApi(token=os.environ.get("HF_TOKEN"))
-        _stage_files = _stage_api.list_repo_files(VISION_HF_CHECKPOINT_REPO)
-        if any(f.startswith(f"{VISION_HF_PREFIX}/orpo/final_adapter/") for f in _stage_files):
-            _fresh_stage = "done"
-        elif any(f.startswith(f"{VISION_HF_PREFIX}/sft/final_adapter/") for f in _stage_files):
-            _fresh_stage = "orpo"
-            _fresh_resume = any(
-                f.startswith(f"{VISION_HF_PREFIX}/orpo/checkpoint-") and "/" in f[len(f"{VISION_HF_PREFIX}/orpo/checkpoint-"):]
-                for f in _stage_files
-            )
-        else:
-            _fresh_stage = "sft"
-            _fresh_resume = None
-        print(f"📍 [VISION] Fresh stage detection untuk ORPO: `{_fresh_stage}` (resume={_fresh_resume})")
-    except Exception as _e_stage:
-        print(f"⚠️ Gagal re-detect stage untuk ORPO ({_e_stage}); pakai vision_current_stage={vision_current_stage}.")
-
     mo.stop(
-        _fresh_stage != "orpo",
-        mo.md(f"ℹ️ **[VISION] Bukan tahap ORPO (deteksi fresh: `{_fresh_stage}`). Melewati training ORPO.**")
+        processor is None,
+        mo.md("⏭️ **[JOINT-ORPO] Model tidak dimuat — data prep dilewati.**"),
+    )
+    mo.stop(
+        torch is None,  # dependency-edge guard (tidak pernah True; hanya ordering)
+        mo.md("unreachable"),
     )
 
-    # Active memory cleanup from previous SFT/ORPO attempts
-    vision_orpo_trainer = None
-    _optimizer = None
-    _lr_scheduler = None
-    if "vision_model" in globals() and globals()["vision_model"] is not None:
-        try:
-            globals()["vision_model"].zero_grad(set_to_none=True)
-        except Exception:
-            pass
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    # ---- 1. Load & format VISION ORPO (gambar lazy via dataset_idx) ----
+    print(f"[JOINT-ORPO] Memuat vision ORPO dari {DATASET_VISION_REPO}...")
+    raw_orpo_dataset = load_dataset(DATASET_VISION_REPO, VISION_ORPO_CONFIG, split="train")
+    if SAMPLE_TRAIN_VISION_ORPO > 0 and len(raw_orpo_dataset) > SAMPLE_TRAIN_VISION_ORPO:
+        raw_orpo_dataset = raw_orpo_dataset.shuffle(seed=SEED).select(range(SAMPLE_TRAIN_VISION_ORPO))
+    print(f"  ✅ Vision ORPO: {len(raw_orpo_dataset)} sampel.")
 
-    # ORPO Vision Training
-    print(f"\n=== [VISION] ORPO Vision Training (beta={VISION_ORPO_BETA}) ===")
-    vision_orpo_output_dir = os.path.join(VISION_OUTPUT_DIR, "orpo")
-
-    # Load ORPO dataset directly from Hugging Face Hub
-    print("[VISION] Memuat dataset ORPO dari Hugging Face Hub...")
-    raw_orpo_dataset = load_dataset("daruokta/t5gemma2-indonesia-vision-formatted", "vision_orpo", split="train")
-    print(f"✅ [VISION] ORPO dataset dimuat dari Hugging Face: {len(raw_orpo_dataset)} sampel.")
-
-    # Format ORPO dataset using ONLY text columns to avoid slow Hugging Face image loading/decoding
-    print("[VISION] Formatting ORPO dataset (text-only pass)...")
-    orpo_formatted = []
+    vision_orpo_rows = []
     prompts_list = raw_orpo_dataset["prompt"]
     chosen_list = raw_orpo_dataset["chosen"]
     rejected_list = raw_orpo_dataset["rejected"]
@@ -4553,7 +3173,7 @@ def _(
         chosen_raw = chosen_list[_idx_orpo].replace("assistant: ", "", 1).strip()
         rejected_raw = rejected_list[_idx_orpo].replace("assistant: ", "", 1).strip()
 
-        # Parse prompt to messages text-only
+        # Parse prompt -> messages (hitung penanda 📷 tanpa load gambar)
         lines = prompt_str.split("\n")
         raw_messages = []
         current_role = None
@@ -4579,672 +3199,483 @@ def _(
         if current_role is not None:
             raw_messages.append((current_role, "\n".join(current_lines)))
 
-        # Merge messages and count 📷
         new_messages = []
-        for _role_orpo, _content_orpo in raw_messages:
-            if _role_orpo == "user" and "📷" in _content_orpo:
-                _num_images_orpo = _content_orpo.count("📷")
-                _text_content_orpo = _content_orpo.replace("📷", "").strip()
+        for _role_o, _content_o in raw_messages:
+            if _role_o == "user" and "📷" in _content_o:
+                _num_images_o = _content_o.count("📷")
+                _text_content_o = _content_o.replace("📷", "").strip()
                 new_content = []
-                for _ in range(_num_images_orpo):
+                for _ in range(_num_images_o):
                     new_content.append({"type": "image"})
-                if _text_content_orpo:
-                    new_content.append({"type": "text", "text": _text_content_orpo})
-                new_messages.append({"role": _role_orpo, "content": new_content})
+                if _text_content_o:
+                    new_content.append({"type": "text", "text": _text_content_o})
+                new_messages.append({"role": _role_o, "content": new_content})
             else:
-                new_messages.append({"role": _role_orpo, "content": [{"type": "text", "text": _content_orpo}]})
+                new_messages.append({"role": _role_o, "content": [{"type": "text", "text": _content_o}]})
 
-        # Gabungkan turn dengan role sama yang berurutan (mis. dua "user:" beruntun
-        # akibat prompt yang kepecah pas parsing baris demi baris). Tanpa ini,
-        # apply_chat_template bisa gagal dengan
-        # "Conversation roles must alternate user/assistant/user/assistant/...".
-        # Logika sama persis dengan yang dipakai di parse_orpo_prompt_to_messages().
-        _merged_messages_orpo = []
-        for _msg_orpo in new_messages:
-            _role_orpo = _msg_orpo["role"]
-            _content_orpo = _msg_orpo["content"]
-            if _merged_messages_orpo and _merged_messages_orpo[-1]["role"] == _role_orpo:
-                _last_msg_orpo = _merged_messages_orpo.pop()
-                _merged_content_orpo = list(_last_msg_orpo["content"]) + list(_content_orpo)
-                _merged_messages_orpo.append({"role": _role_orpo, "content": _merged_content_orpo})
+        # Gabungkan turn dengan role sama yang berurutan (apply_chat_template
+        # menolak "Conversation roles must alternate user/assistant/...")
+        _merged_messages_o = []
+        for _msg_o in new_messages:
+            _role_o = _msg_o["role"]
+            _content_o = _msg_o["content"]
+            if _merged_messages_o and _merged_messages_o[-1]["role"] == _role_o:
+                _last_msg_o = _merged_messages_o.pop()
+                _merged_content_o = list(_last_msg_o["content"]) + list(_content_o)
+                _merged_messages_o.append({"role": _role_o, "content": _merged_content_o})
             else:
-                _merged_messages_orpo.append({"role": _role_orpo, "content": list(_content_orpo)})
-        new_messages = _merged_messages_orpo
+                _merged_messages_o.append({"role": _role_o, "content": list(_content_o)})
+        new_messages = _merged_messages_o
 
-        # Apply chat template
-        pt = vision_processor.apply_chat_template(new_messages, tokenize=False, add_generation_prompt=True)
+        pt = processor.apply_chat_template(new_messages, tokenize=False, add_generation_prompt=True)
 
         if chosen_raw.endswith("<end_of_turn>"):
             chosen_raw = chosen_raw[:-len("<end_of_turn>")].strip()
         if rejected_raw.endswith("<end_of_turn>"):
             rejected_raw = rejected_raw[:-len("<end_of_turn>")].strip()
 
-        orpo_formatted.append({
+        vision_orpo_rows.append({
             "prompt_text": pt,
             "chosen_text": chosen_raw,
             "rejected_text": rejected_raw,
-            "dataset_idx": _idx_orpo
+            "dataset_idx": _idx_orpo,
+            "_modality": "vision",
         })
-    orpo_dataset = Dataset.from_list(orpo_formatted)
-    print(f"✅ [VISION] ORPO dataset siap: {len(orpo_dataset)} sampel.")
+    print(f"  ✅ Vision ORPO rows: {len(vision_orpo_rows)}")
 
-    # Split Train / Validation
-    split_orpo = orpo_dataset.train_test_split(test_size=VISION_TEST_SIZE, seed=SEED)
-    vision_orpo_train_dataset = split_orpo["train"]
-    vision_orpo_eval_dataset = split_orpo["test"]
-    print(f"  [VISION] ORPO Train size: {len(vision_orpo_train_dataset)} | ORPO Eval size: {len(vision_orpo_eval_dataset)}")
+    # ---- 2. TEKS ORPO (chat_orpo -> joint format) ----
+    print("[JOINT-ORPO] Memuat teks ORPO (chat_orpo)...")
+    _text_orpo_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_ORPO_CONFIG, "train", SAMPLE_TRAIN_TEXT_ORPO)
+    text_orpo_rows = text_orpo_to_joint(_text_orpo_samples)
+    print(f"  ✅ Text ORPO rows: {len(text_orpo_rows)}")
 
-    # Load and format text-only validation dataset for ORPO
-    print("[VISION] Loading text-only ORPO validation dataset from HF Hub...")
-    _text_only_eval_dataset = None
+    # ---- 3. RATIO MIX ----
+    _target_text_o = int((JOINT_TEXT_RATIO_ORPO / max(1e-9, 1.0 - JOINT_TEXT_RATIO_ORPO)) * len(vision_orpo_rows))
+    if len(text_orpo_rows) > _target_text_o:
+        random.seed(SEED)
+        random.shuffle(text_orpo_rows)
+        text_orpo_rows = text_orpo_rows[:_target_text_o]
+    _actual_ratio_o = len(text_orpo_rows) / max(1, len(text_orpo_rows) + len(vision_orpo_rows))
+    print(f"  📊 ORPO Mix: vision={len(vision_orpo_rows)} | teks={len(text_orpo_rows)} (aktual={_actual_ratio_o:.2f})")
+
+    joint_orpo_rows = vision_orpo_rows + text_orpo_rows
+    random.seed(SEED)
+    random.shuffle(joint_orpo_rows)
+
+    # ---- 4. Split train/eval ----
+    _vsplit = [r for r in vision_orpo_rows]
+    random.seed(SEED)
+    random.shuffle(_vsplit)
+    _n_eval_mm_o = min(MAX_EVAL_SAMPLES, max(5, int(len(_vsplit) * VISION_TEST_SIZE)))
+    orpo_eval_mm = Dataset.from_list(_vsplit[:_n_eval_mm_o])
+
+    # Eval text-only ORPO (baseline chat_orpo validation)
+    _eval_text_o_rows = []
     try:
-        _val_chat_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "chat_sft", split="validation")
-        _val_indoqa_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "indoqa_sft", split="validation")
-        _val_chat_samples = [dict(_row) for _row in _val_chat_ds]
-        _val_indoqa_samples = [dict(_row) for _row in _val_indoqa_ds]
-
-        import random as _rng_orpo
-        _raw_text_only_samples = _val_chat_samples + _val_indoqa_samples
-        _rng_orpo.seed(42)
-        _rng_orpo.shuffle(_raw_text_only_samples)
-        _raw_text_only_samples = _raw_text_only_samples[:100]
-
-        _text_only_formatted = []
-        for _row in _raw_text_only_samples:
-            _pt = format_encoder_from_raw(_row["input"])
-            _tt = _row["target"]
-            _text_only_formatted.append({
-                "prompt_text": _pt,
-                "images": [],
-                "chosen_text": _tt,
-                "rejected_text": "Maaf, saya kurang tahu mengenai hal tersebut."
-            })
-        _text_only_eval_dataset = Dataset.from_list(_text_only_formatted)
-        print(f"  [VISION] Text-Only ORPO Eval size: {len(_text_only_eval_dataset)}")
+        _val_t_orpo = load_hf_samples(DATASET_TEXT_REPO, TEXT_ORPO_CONFIG, "validation", 0)
+        _eval_text_o_rows = text_orpo_to_joint(_val_t_orpo)
+        random.seed(42)
+        random.shuffle(_eval_text_o_rows)
+        _eval_text_o_rows = _eval_text_o_rows[:MAX_EVAL_SAMPLES]
+        print(f"  ✅ Text-only ORPO eval: {len(_eval_text_o_rows)} rows")
     except Exception as e:
-        print(f"⚠️ [VISION] Gagal memuat dataset validasi teks untuk ORPO: {e}")
+        print(f"  ⚠️ Gagal memuat eval text-only ORPO: {e}")
 
-    orpo_eval_datasets = {"multimodal": vision_orpo_eval_dataset}
-    if _text_only_eval_dataset is not None:
-        orpo_eval_datasets["text_only"] = _text_only_eval_dataset
+    orpo_eval_text = Dataset.from_list(_eval_text_o_rows) if _eval_text_o_rows else None
+    joint_orpo_train_dataset = Dataset.from_list(joint_orpo_rows)
 
-    # Setup qualitative generation samples
-    _orpo_val_rows = list(vision_orpo_eval_dataset)
-    _n_eval_gen = min(len(_orpo_val_rows), 20)
-    _eval_generation_samples = []
-    for _item_orpo in _orpo_val_rows[:_n_eval_gen]:
-        _eval_generation_samples.append({
-            "prompt_text": _item_orpo["prompt_text"],
-            "target_text": _item_orpo["chosen_text"],
-            "images": raw_orpo_dataset[_item_orpo["dataset_idx"]]["images"] if "dataset_idx" in _item_orpo else []
-        })
+    joint_orpo_eval_datasets = {"multimodal": orpo_eval_mm}
+    if orpo_eval_text is not None:
+        joint_orpo_eval_datasets["text_only"] = orpo_eval_text
 
-    # Define compute metrics
-    def _compute_metrics(eval_preds):
-        metrics = {}
-        if not VISION_PREDICT_WITH_GENERATE:
-            return metrics
-        if rouge_metric is None and bleu_metric is None:
-            return metrics
-        preds, labels = eval_preds
-        if isinstance(preds, tuple):
-            preds = preds[0]
-        tok = cast(Any, vision_processor.tokenizer)
+    print(f"\n  ✅ JOINT ORPO train: {len(joint_orpo_train_dataset)} | eval: {list(joint_orpo_eval_datasets.keys())}")
+    return joint_orpo_train_dataset, joint_orpo_eval_datasets, orpo_eval_mm, orpo_eval_text, raw_orpo_dataset
 
-        if preds.ndim == 3:
-            preds = preds.argmax(axis=-1)
 
-        labels = np.where(labels != -100, labels, tok.pad_token_id)
-        preds = np.where(preds != -100, preds, tok.pad_token_id)
-        decoded_preds = tok.batch_decode(preds, skip_special_tokens=True)
-        decoded_labels = tok.batch_decode(labels, skip_special_tokens=True)
-        decoded_preds = [pred.strip() for pred in decoded_preds]
-        decoded_labels = [label.strip() for label in decoded_labels]
-
-        if rouge_metric is not None:
-            try:
-                result = cast(Any, rouge_metric).compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=False)
-                if result is not None:
-                    for key, value in result.items():
-                        metrics[key] = value * 100
-            except Exception as e:
-                print(f"Error during ROUGE: {e}")
-
-        if bleu_metric is not None:
-            try:
-                formatted_labels = [[label] for label in decoded_labels]
-                bleu_result = cast(Any, bleu_metric).compute(predictions=decoded_preds, references=formatted_labels)
-                if bleu_result is not None and "bleu" in bleu_result:
-                    metrics["bleu"] = bleu_result["bleu"] * 100
-            except Exception as e:
-                print(f"Error during BLEU: {e}")
-
-        if exact_match_metric is not None:
-            try:
-                em_result = cast(Any, exact_match_metric).compute(predictions=decoded_preds, references=decoded_labels)
-                if em_result is not None and "exact_match" in em_result:
-                    metrics["exact_match"] = em_result["exact_match"] * 100
-            except Exception as e:
-                print(f"Error during Exact Match: {e}")
-
-        if bertscore_metric is not None:
-            try:
-                bertscore_result = cast(Any, bertscore_metric).compute(
-                    predictions=decoded_preds, references=decoded_labels,
-                    model_type="google/embeddinggemma-300m", num_layers=12, lang="id"
-                )
-                if bertscore_result is not None and "f1" in bertscore_result:
-                    metrics["bertscore_f1"] = np.mean(bertscore_result["f1"]) * 100
-            except Exception as e:
-                print(f"Error during BERTScore: {e}")
-
-        if meteor_metric is not None:
-            try:
-                meteor_result = cast(Any, meteor_metric).compute(predictions=decoded_preds, references=decoded_labels)
-                if meteor_result is not None and "meteor" in meteor_result:
-                    metrics["meteor"] = meteor_result["meteor"] * 100
-            except Exception as e:
-                print(f"Error during METEOR: {e}")
-
-        return metrics
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    orpo_collator = VisionORPOCollator(vision_processor, VISION_MAX_SOURCE_LENGTH, VISION_MAX_TARGET_LENGTH, raw_orpo_dataset)
-
-    # Instantiate GrokAdEMAMix Optimizer with split learning rates
-    print("[VISION] Menggunakan optimizer: GrokAdEMAMix (Split LR: Encoder=0.5x, Decoder=1.0x, Projector=1.0x, VisionTower=0.5x)")
-    _encoder_params = []
-    _decoder_params = []
-    _projector_params = []
-    _vision_tower_params = []
-    for _name, _param in vision_model.named_parameters():
-        if _param.requires_grad:
-            if "multi_modal_projector" in _name:
-                _projector_params.append(_param)
-            elif "vision_tower" in _name:
-                _vision_tower_params.append(_param)
-            elif "encoder" in _name:
-                _encoder_params.append(_param)
-            elif "decoder" in _name:
-                _decoder_params.append(_param)
-            else:
-                _decoder_params.append(_param)
-
-    _optimizer = GrokAdEMAMix([
-        {"params": _encoder_params, "lr": VISION_LEARNING_RATE * 0.5},
-        {"params": _decoder_params, "lr": VISION_LEARNING_RATE},
-        {"params": _projector_params, "lr": VISION_LEARNING_RATE},
-        {"params": _vision_tower_params, "lr": VISION_LEARNING_RATE * 0.5}
-    ], weight_decay=VISION_WEIGHT_DECAY, grok_alpha=2.0, grok_lamb=0.98)
-
-    # Calculate steps for Cosine Scheduler
-    _num_update_steps_per_epoch = max(
-        1, len(vision_orpo_train_dataset) // (VISION_PER_DEVICE_TRAIN_BATCH_SIZE * VISION_GRADIENT_ACCUMULATION_STEPS)
-    )
-    _max_steps = _num_update_steps_per_epoch * VISION_NUM_EPOCHS_ORPO
-
-    _lr_scheduler = get_scheduler(
-        name=VISION_LR_SCHEDULER_TYPE,
-        optimizer=_optimizer,
-        num_warmup_steps=VISION_WARMUP_STEPS,
-        num_training_steps=_max_steps,
-    )
-
-    # Callbacks (same as V6 text-only)
-    _bad_words_ids = [
-        [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, vision_model).config.vocab_size
-    ]
-    _plot_callback = VisionTrainingPlotCallback(output_dir=vision_orpo_output_dir)
-    _progress_callback = CleanNotebookProgressCallback()
-
-    _sample_callback_multimodal = VisionSampleGenerationCallback(
-        processor=vision_processor,
-        eval_samples=_eval_generation_samples,
-        output_dir=vision_orpo_output_dir,
-        eval_every_n_steps=50,
-        temperature=0.7,
-        top_p=0.9,
-        repetition_penalty=1.2,
-        bad_words_ids=_bad_words_ids,
-    )
-    _sample_callback_multimodal.log_path = os.path.join(vision_orpo_output_dir, "orpo_eval_samples_multimodal.txt")
-
-    # Setup qualitative generation samples for text-only validation in ORPO
-    _text_only_val_rows = list(_text_only_eval_dataset) if _text_only_eval_dataset is not None else []
-    _n_text_only_eval_gen = min(len(_text_only_val_rows), 20)
-    _text_only_eval_generation_samples = []
-    for _item_text in _text_only_val_rows[:_n_text_only_eval_gen]:
-        _text_only_eval_generation_samples.append({
-            "prompt_text": _item_text["prompt_text"],
-            "images": _item_text["images"],
-            "target_text": _item_text["chosen_text"]
-        })
-
-    _sample_callback_text_only = VisionSampleGenerationCallback(
-        processor=vision_processor,
-        eval_samples=_text_only_eval_generation_samples,
-        output_dir=vision_orpo_output_dir,
-        eval_every_n_steps=50,
-        temperature=0.7,
-        top_p=0.9,
-        repetition_penalty=1.2,
-        bad_words_ids=_bad_words_ids,
-    )
-    _sample_callback_text_only.log_path = os.path.join(vision_orpo_output_dir, "orpo_eval_samples_text_only.txt")
-
-    _hub_callback = VisionHubUploadCallback(
-        repo_id=VISION_HF_CHECKPOINT_REPO,
-        stage="orpo",
-        hf_prefix=VISION_HF_PREFIX,
-        token=os.environ.get("HF_TOKEN"),
-        output_dir=vision_orpo_output_dir,
-    )
-
-    vision_orpo_result = None
+# =====================================================================
+# JOINT ORPO TRAINING CELL
+# =====================================================================
+@app.cell
+def _(
+    ADEMA_BETA1,
+    ADEMA_BETA2,
+    ADEMA_BETA3,
+    ALL_SUPPRESS_IDS,
+    Any,
+    BF16,
+    CleanNotebookProgressCallback,
+    GROK_ALPHA,
+    GROK_LAMB,
+    JOINT_PREFIX,
+    JointHubUploadCallback,
+    JointORPOTrainer,
+    MAX_EVAL_GEN_SAMPLES,
+    MAX_SOURCE_LENGTH,
+    MAX_TARGET_LENGTH,
+    MUON_MAX_GRAD_NORM,
+    MUON_MOMENTUM,
+    MUON_NESTEROV,
+    MUON_NS_STEPS,
+    OPTIMIZER_TYPE,
+    ORPO_BETA,
+    ORPO_GRADIENT_ACCUMULATION_STEPS,
+    ORPO_LABEL_SMOOTHING_FACTOR,
+    ORPO_LEARNING_RATE,
+    ORPO_LOGGING_STEPS,
+    ORPO_LR_MULT_DECODER,
+    ORPO_LR_MULT_ENCODER,
+    ORPO_LR_MULT_PROJECTOR,
+    ORPO_LR_MULT_VISION_TOWER,
+    ORPO_MUON_LR_SCALE,
+    ORPO_NUM_EPOCHS,
+    ORPO_PER_DEVICE_TRAIN_BATCH_SIZE,
+    ORPO_PREDICT_WITH_GENERATE,
+    ORPO_SAVE_EVAL_STEPS,
+    ORPO_SAVE_TOTAL_LIMIT,
+    ORPO_WARMUP_STEPS,
+    ORPO_WEIGHT_DECAY,
+    OUTPUT_DIR,
+    PROJECTOR_BRANCH,
+    RUN_ORPO,
+    Seq2SeqTrainingArguments,
+    UNIFIED_HF_REPO,
+    VisionORPOCollator,
+    VisionSampleGenerationCallback,
+    VisionTrainingPlotCallback,
+    cast,
+    create_optimizer,
+    gc,
+    get_scheduler,
+    joint_orpo_eval_datasets,
+    joint_orpo_train_dataset,
+    make_compute_metrics,
+    model,
+    mo,
+    orpo_eval_mm,
+    orpo_eval_text,
+    os,
+    pipeline_stage,
+    processor,
+    raw_orpo_dataset,
+    torch,
+    traceback,
+):
+    # ---- Fresh stage re-detect (marimo cache pipeline_stage mungkin stale) ----
+    from huggingface_hub import HfApi as _OrpoStageApi
+    _fresh_stage = pipeline_stage
+    if _fresh_stage in ("steering", "cangkok", "sft"):
+        # Sesi ini bisa saja barusan menyelesaikan SFT
+        _fresh_stage = "orpo"
+    _fresh_resume = None
     try:
-        vision_orpo_trainer = VisionORPOTrainer(
-            beta=VISION_ORPO_BETA, model=vision_model,
-            args=Seq2SeqTrainingArguments(
-                per_device_train_batch_size=VISION_PER_DEVICE_TRAIN_BATCH_SIZE,
-                per_device_eval_batch_size=1,  # Eval one sample at a time to prevent OOM
-                gradient_accumulation_steps=VISION_GRADIENT_ACCUMULATION_STEPS,
-                eval_accumulation_steps=1,  # Move predictions to CPU immediately
-                learning_rate=VISION_LEARNING_RATE,
-                num_train_epochs=VISION_NUM_EPOCHS_ORPO,
-                warmup_steps=VISION_WARMUP_STEPS,
-                weight_decay=VISION_WEIGHT_DECAY,
-                lr_scheduler_type=VISION_LR_SCHEDULER_TYPE,
-                logging_steps=VISION_LOGGING_STEPS,
-                save_strategy="steps",
-                save_steps=50,
-                save_total_limit=VISION_SAVE_TOTAL_LIMIT,
-                output_dir=vision_orpo_output_dir,
-                remove_unused_columns=False,
-                fp16=False, bf16=BF16, optim=VISION_OPTIM,
-                gradient_checkpointing=True,
-                eval_strategy="steps",
-                eval_steps=50,
-                report_to="none",
-                predict_with_generate=VISION_PREDICT_WITH_GENERATE,
-                generation_max_length=VISION_MAX_TARGET_LENGTH,
-            ),
-            train_dataset=vision_orpo_train_dataset,
-            eval_dataset=orpo_eval_datasets,
-            data_collator=orpo_collator,
-            optimizers=(_optimizer, _lr_scheduler),
-            compute_metrics=_compute_metrics,
-            callbacks=[_plot_callback, _progress_callback, _sample_callback_multimodal, _sample_callback_text_only, _hub_callback],
+        _stage_api = _OrpoStageApi(token=os.environ.get("HF_TOKEN"))
+        _stage_files = _stage_api.list_repo_files(UNIFIED_HF_REPO)
+        if any(f.startswith(f"{JOINT_PREFIX}/orpo/final_adapter/") for f in _stage_files):
+            _fresh_stage = "done"
+        elif any(f.startswith(f"{JOINT_PREFIX}/sft/final_adapter/") for f in _stage_files):
+            _fresh_stage = "orpo" if RUN_ORPO else "sft-only"
+            _ckp = f"{JOINT_PREFIX}/orpo/checkpoint-"
+            _fresh_resume = any(
+                f.startswith(_ckp) and "/" in f[len(_ckp):]
+                for f in _stage_files
+            )
+        print(f"📍 [JOINT-ORPO] Fresh stage: `{_fresh_stage}` (resume={_fresh_resume})")
+    except Exception as _e_st:
+        print(f"⚠️ Gagal re-detect stage ORPO ({_e_st}); pakai {_fresh_stage}.")
+
+    _should_run = RUN_ORPO and _fresh_stage == "orpo" and model is not None
+    if not _should_run:
+        print(
+            f"⏭️ [JOINT-ORPO] Dilewati — RUN_ORPO={RUN_ORPO}, fresh stage=`{_fresh_stage}`, model={'OK' if model is not None else 'None'}."
         )
-        # Buang NotebookProgressCallback bawaan transformers (kalau ada) supaya
-        # tabel progress bawaan (dengan kolom "Validation Loss" yang selalu "No log")
-        # tidak ikut ter-render berdampingan dengan CleanNotebookProgressCallback.
-        from transformers.utils.notebook import NotebookProgressCallback as _HFNotebookProgressCallback
-        vision_orpo_trainer.remove_callback(_HFNotebookProgressCallback)
-
-        # === RESUME FROM HF CHECKPOINT ===
-        # Pakai hasil deteksi fresh (`_fresh_resume`) alih-alih `vision_resume_checkpoint`
-        # yang mungkin stale dari cell deteksi stage awal.
-        _resume_from = None
-        if _fresh_resume:
-            try:
-                from huggingface_hub import snapshot_download as _resume_snap
-                from huggingface_hub import HfApi as _ResumeApi
-
-                _api = _ResumeApi(token=os.environ.get("HF_TOKEN"))
-                _files = _api.list_repo_files(repo_id=VISION_HF_CHECKPOINT_REPO)
-
-                _ckpts = list(set([f.split('/')[2] for f in _files if f.startswith(f"{VISION_HF_PREFIX}/orpo/checkpoint-")]))
-                if _ckpts:
-                    _ckpts.sort(key=lambda x: int(x.split('-')[1]))
-                    _latest_ckpt = _ckpts[-1]
-                else:
-                    _latest_ckpt = "checkpoint-*"
-
-                print(f"\n📥 [VISION] Downloading {_latest_ckpt} (orpo) dari HF untuk resume...")
-                _resume_snap(
-                    repo_id=VISION_HF_CHECKPOINT_REPO,
-                    local_dir=vision_orpo_output_dir,
-                    allow_patterns=[f"{VISION_HF_PREFIX}/orpo/{_latest_ckpt}/**"],
-                    token=os.environ.get("HF_TOKEN"),
-                )
-                _sub_dir = os.path.join(vision_orpo_output_dir, VISION_HF_PREFIX, "orpo")
-                if os.path.exists(_sub_dir):
-                    import shutil as _shutil_ORPO
-                    for _item in os.listdir(_sub_dir):
-                        _src = os.path.join(_sub_dir, _item)
-                        _dst = os.path.join(vision_orpo_output_dir, _item)
-                        if os.path.isdir(_src) and _item.startswith("checkpoint-"):
-                            if os.path.exists(_dst):
-                                _shutil_ORPO.rmtree(_dst)
-                            _shutil_ORPO.move(_src, _dst)
-                    _shutil_ORPO.rmtree(os.path.join(vision_orpo_output_dir, VISION_HF_PREFIX))
-
-                _checkpoints = sorted([
-                    d for d in os.listdir(vision_orpo_output_dir)
-                    if d.startswith("checkpoint-") and os.path.isdir(os.path.join(vision_orpo_output_dir, d))
-                ])
-                if _checkpoints:
-                    _resume_from = True
-                    print(f"✅ [VISION] Ditemukan {len(_checkpoints)} checkpoint(s). Resume dari yang terbaru!")
-                else:
-                    print("⚠️ [VISION] Tidak ada checkpoint valid ditemukan. Mulai dari awal.")
-            except Exception as e:
-                print(f"⚠️ [VISION] Gagal download checkpoint: {e}. Mulai dari awal.")
-
-        vision_orpo_result = vision_orpo_trainer.train(resume_from_checkpoint=_resume_from)
-        print(f"✅ [VISION] ORPO selesai! Loss: {vision_orpo_result.training_loss:.4f}")
-
-        # Save final ORPO model & processor
-        vision_orpo_final_path = os.path.join(vision_orpo_output_dir, "final_adapter")
-        print(f"💾 [VISION] Saving final ORPO adapter ke {vision_orpo_final_path}...")
-        vision_orpo_trainer.save_model(vision_orpo_final_path)
-        vision_processor.save_pretrained(vision_orpo_final_path)
-
-        # Upload final adapter to HF Hub
-        if os.environ.get("HF_TOKEN"):
-            try:
-                from huggingface_hub import HfApi as _HfApi_ORPO
-                _final_api = _HfApi_ORPO(token=os.environ.get("HF_TOKEN"))
-                _final_api.create_repo(repo_id=VISION_HF_CHECKPOINT_REPO, repo_type="model", private=False, exist_ok=True)
-                print("📤 [VISION] Uploading final ORPO adapter ke HF Hub...")
-                _final_api.upload_folder(
-                    folder_path=vision_orpo_final_path,
-                    repo_id=VISION_HF_CHECKPOINT_REPO,
-                    path_in_repo=f"{VISION_HF_PREFIX}/orpo/final_adapter",
-                    repo_type="model",
-                )
-                print("✅ [VISION] Upload final ORPO adapter sukses!")
-            except Exception as e:
-                print(f"⚠️ [VISION] Gagal upload final ORPO adapter: {e}")
-    except Exception as e:
-        print(f"❌ [VISION] ORPO gagal: {e}")
-        traceback.print_exc()
-    finally:
-        vision_orpo_trainer = None
-        _optimizer = None
-        _lr_scheduler = None
-        if "vision_model" in globals() and globals()["vision_model"] is not None:
-            try:
-                globals()["vision_model"].zero_grad(set_to_none=True)
-            except Exception:
-                pass
+    if _should_run:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    return
 
+        joint_orpo_output_dir = os.path.join(OUTPUT_DIR, JOINT_PREFIX, "orpo")
+        os.makedirs(joint_orpo_output_dir, exist_ok=True)
+        print(f"[JOINT-ORPO] Output dir: {joint_orpo_output_dir}")
+        print(f"[JOINT-ORPO] Train: {len(joint_orpo_train_dataset)} | Eval sets: {list(joint_orpo_eval_datasets.keys())} | beta={ORPO_BETA}")
 
-@app.cell
-def _(VISION_HF_CHECKPOINT_REPO, VISION_OUTPUT_DIR, os, vision_model, vision_processor):
-    def save_vision_adapter():
-        if vision_model is None:
-            return
-        # Menyimpan adapter vision dan mengunggah ke HF Hub
-        adapter_path = os.path.join(VISION_OUTPUT_DIR, "final_adapter")
-        vision_model.save_pretrained(adapter_path)
-        vision_processor.save_pretrained(adapter_path)
-        print(f"✅ [VISION] Adapter LoRA vision berhasil disimpan ke: {adapter_path}")
-
-        token = os.environ.get("HF_TOKEN")
-        if token:
-            print(f"[VISION] Mengunggah adapter vision ke Hugging Face Hub: {VISION_HF_CHECKPOINT_REPO}...")
-    save_vision_adapter()
-    return
-
-
-@app.cell
-def _(
-    ALL_SUPPRESS_IDS,
-    load_dataset,
-    random,
-    re,
-    torch,
-    traceback,
-    vision_model,
-    vision_processor,
-    vision_tokenizer,
-):
-    def run_vision_eval():
-        if vision_model is None:
-            return
-        # =====================================================================
-        # EVALUASI GENERASI (TEST KUALITAS GENERASI CHAT & VISION)
-        # =====================================================================
-        # Menguji kemampuan visual dan menjaga kemampuan dialog bahasa Indonesia
-        # menggunakan dataset validasi teks asli dari training sebelumnya
-        vision_model.eval()
-
-        def _format_encoder_eval(raw_input: str) -> str:
-            system = "Kamu adalah asisten AI yang helpful, santai, dan ramah. Gunakan Bahasa Indonesia sebagai bahasa utama."
-            system_match = re.search(r"^system:\s*(.*?)(?=\nuser:)", raw_input, re.DOTALL)
-            if system_match:
-                system = system_match.group(1).strip()
-                raw_input = raw_input[system_match.end() :].strip()
-
-            parts = re.split(r"\n(user:|assistant:)\s*", "\n" + raw_input)
-            formatted = ""
-            is_first_user = True
-
-            for i in range(1, len(parts), 2):
-                role = parts[i].replace(":", "").strip()
-                content = parts[i + 1].strip()
-                if not content:
-                    continue
-
-                if role == "user":
-                    formatted += "<start_of_turn>user\n"
-                    if is_first_user and system:
-                        formatted += system + "\n\n"
-                        is_first_user = False
-                    formatted += content + "<end_of_turn>\n"
-                elif role == "assistant":
-                    formatted += "<start_of_turn>model\n"
-                    formatted += content + "<end_of_turn>\n"
-
-            formatted += "<start_of_turn>model\n"
-            return formatted
-
-        def _process_sft_rows_eval(samples, tokenizer, is_chat=True):
-            rows = []
-            if is_chat:
-                chat_groups = {}
-                for obj in samples:
-                    if not obj.get("input") or not obj.get("target"):
-                        continue
-                    chat_idx = obj.get("chat_idx", -1)
-                    if chat_idx not in chat_groups:
-                        chat_groups[chat_idx] = []
-                    chat_groups[chat_idx].append(obj)
-
-                for chat_idx, turns in chat_groups.items():
-                    turns = sorted(turns, key=lambda x: x.get("turn_idx", 0))
-                    for turn in turns:
-                        inp_f = _format_encoder_eval(turn["input"])
-                        tgt_f = turn["target"].strip() + "<end_of_turn>"
-                        inp_ids = tokenizer.encode(inp_f, add_special_tokens=True)
-                        # Mirror training collator: processor() hardcode BOS saat
-                        # training, jadi validasi teks-only juga harus diawali BOS
-                        # (add_bos_token=False membuat encode() tidak menambah BOS).
-                        _bos_id = getattr(tokenizer, "bos_token_id", None)
-                        if _bos_id is not None and (not inp_ids or inp_ids[0] != _bos_id):
-                            inp_ids = [_bos_id] + inp_ids
-                        if getattr(tokenizer, "eos_token_id", None) is not None and inp_ids[-1] != tokenizer.eos_token_id:
-                            inp_ids.append(tokenizer.eos_token_id)
-                        tgt_ids = tokenizer.encode(tgt_f, add_special_tokens=False)
-                        if getattr(tokenizer, "eos_token_id", None) is not None and tgt_ids[-1] != tokenizer.eos_token_id:
-                            tgt_ids.append(tokenizer.eos_token_id)
-                        rows.append({"input_ids": inp_ids, "labels": tgt_ids})
-            else:
-                for obj in samples:
-                    inp_f = _format_encoder_eval(obj.get("input", ""))
-                    tgt_f = obj.get("target", "").strip() + "<end_of_turn>"
-                    inp_ids = tokenizer.encode(inp_f, add_special_tokens=True)
-                    if getattr(tokenizer, "eos_token_id", None) is not None and inp_ids[-1] != tokenizer.eos_token_id:
-                        inp_ids.append(tokenizer.eos_token_id)
-                    tgt_ids = tokenizer.encode(tgt_f, add_special_tokens=False)
-                    if getattr(tokenizer, "eos_token_id", None) is not None and tgt_ids[-1] != tokenizer.eos_token_id:
-                        tgt_ids.append(tokenizer.eos_token_id)
-                    rows.append({"input_ids": inp_ids, "labels": tgt_ids})
-            return rows
-
-        print("\n" + "=" * 70)
-        print("[VISION] TEST 1: Evaluasi Gambar Umum / Dokumen (Multimodal)")
-        print("=" * 70)
-
-        test_messages = [
-            {"role": "system", "content": "Kamu adalah Gemma, asisten AI cerdas berbahasa Indonesia. Berikan respons yang akurat, ramah, dan terstruktur."},
-            {"role": "user", "content": [
-                {"type": "image"},
-                {"type": "text", "text": "Halo Gemma, boleh tolong jelaskan apa menu makanan yang paling populer seharga di bawah 150 ribu berdasarkan brosur/menu ini?"}
-            ]}
+        # ---- Eval generation samples ----
+        _mm_o = list(orpo_eval_mm) if orpo_eval_mm is not None else []
+        _mm_gen_o = []
+        for _item_o in _mm_o[:MAX_EVAL_GEN_SAMPLES]:
+            _imgs_o = raw_orpo_dataset[_item_o["dataset_idx"]]["images"] if _item_o.get("dataset_idx", -1) >= 0 else []
+            _mm_gen_o.append({
+                "prompt_text": _item_o["prompt_text"],
+                "target_text": _item_o["chosen_text"],
+                "images": _imgs_o,
+            })
+        _to_o = list(orpo_eval_text) if orpo_eval_text is not None else []
+        _to_gen_o = [
+            {"prompt_text": r["prompt_text"], "target_text": r["chosen_text"], "images": []}
+            for r in _to_o[:MAX_EVAL_GEN_SAMPLES]
         ]
 
-        from PIL import Image as PILImage
-        dummy_img = PILImage.new("RGB", (224, 224), color="blue")
+        # ---- Optimizer + scheduler (ORPO lr mults) ----
+        _optimizer_o = create_optimizer(
+            model,
+            base_lr=ORPO_LEARNING_RATE,
+            weight_decay=ORPO_WEIGHT_DECAY,
+            lr_mults={
+                "encoder": ORPO_LR_MULT_ENCODER,
+                "decoder": ORPO_LR_MULT_DECODER,
+                "projector": ORPO_LR_MULT_PROJECTOR,
+                "vision_tower": ORPO_LR_MULT_VISION_TOWER,
+            },
+            opt_type=OPTIMIZER_TYPE,
+            grok_alpha=GROK_ALPHA,
+            gmar_lamb=GROK_LAMB,
+            adema_betas=(ADEMA_BETA1, ADEMA_BETA2),
+            adema_beta3=ADEMA_BETA3,
+            muon_momentum=MUON_MOMENTUM,
+            muon_ns_steps=MUON_NS_STEPS,
+            muon_nesterov=MUON_NESTEROV,
+            muon_max_grad_norm=MUON_MAX_GRAD_NORM,
+            muon_lr_scale=ORPO_MUON_LR_SCALE,
+            projector_branch=PROJECTOR_BRANCH,
+        )
 
-        try:
-            prompt = vision_processor.apply_chat_template(test_messages, tokenize=False, add_generation_prompt=True)
-            inputs = vision_processor(text=prompt, images=dummy_img, return_tensors="pt")
+        _num_update_o = max(
+            1, len(joint_orpo_train_dataset) // (ORPO_PER_DEVICE_TRAIN_BATCH_SIZE * ORPO_GRADIENT_ACCUMULATION_STEPS)
+        )
+        _max_steps_o = _num_update_o * ORPO_NUM_EPOCHS
 
-            device = next(vision_model.parameters()).device
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+        if _optimizer_o is not None:
+            _lr_scheduler_o = get_scheduler(
+                name="cosine",
+                optimizer=_optimizer_o,
+                num_warmup_steps=ORPO_WARMUP_STEPS,
+                num_training_steps=_max_steps_o,
+            )
+            _optimizers_o = (_optimizer_o, _lr_scheduler_o)
+            _optim_str_o = "adamw_torch"
+            print(f"[JOINT-ORPO] Optimizer: {type(_optimizer_o).__name__} | max_steps={_max_steps_o}")
+        else:
+            _optimizers_o = ()
+            _optim_str_o = "paged_adamw_8bit"
+            print("[JOINT-ORPO] Optimizer: paged_adamw_8bit (dibangun Trainer)")
 
-            with torch.no_grad():
-                outputs = vision_model.generate(
-                    **inputs,
-                    max_new_tokens=256,
-                    do_sample=True,
-                    temperature=0.7, top_p=0.9, use_cache=True
+        _bad_words_o = [
+            [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, model).config.vocab_size
+        ]
+        _plot_o = VisionTrainingPlotCallback(output_dir=joint_orpo_output_dir)
+        _progress_o = CleanNotebookProgressCallback()
+        _smp_mm_o = VisionSampleGenerationCallback(
+            processor=processor,
+            eval_samples=_mm_gen_o,
+            output_dir=joint_orpo_output_dir,
+            log_filename="orpo_eval_samples_multimodal.txt",
+            eval_every_n_steps=ORPO_SAVE_EVAL_STEPS,
+            temperature=0.7, top_p=0.9, repetition_penalty=1.2,
+            bad_words_ids=_bad_words_o,
+        )
+        _smp_to_o = VisionSampleGenerationCallback(
+            processor=processor,
+            eval_samples=_to_gen_o,
+            output_dir=joint_orpo_output_dir,
+            log_filename="orpo_eval_samples_text_only.txt",
+            eval_every_n_steps=ORPO_SAVE_EVAL_STEPS,
+            temperature=0.7, top_p=0.9, repetition_penalty=1.2,
+            bad_words_ids=_bad_words_o,
+        )
+        _hub_o = JointHubUploadCallback(
+            repo_id=UNIFIED_HF_REPO,
+            stage="orpo",
+            hf_prefix=JOINT_PREFIX,
+            token=os.environ.get("HF_TOKEN"),
+            output_dir=joint_orpo_output_dir,
+        )
+
+        orpo_collator = VisionORPOCollator(processor, MAX_SOURCE_LENGTH, MAX_TARGET_LENGTH, raw_orpo_dataset)
+
+        joint_orpo_trainer = JointORPOTrainer(
+            beta=ORPO_BETA,
+            model=model,
+            args=Seq2SeqTrainingArguments(
+                output_dir=joint_orpo_output_dir,
+                per_device_train_batch_size=ORPO_PER_DEVICE_TRAIN_BATCH_SIZE,
+                per_device_eval_batch_size=1,
+                gradient_accumulation_steps=ORPO_GRADIENT_ACCUMULATION_STEPS,
+                eval_accumulation_steps=1,
+                learning_rate=ORPO_LEARNING_RATE,
+                num_train_epochs=ORPO_NUM_EPOCHS,
+                warmup_steps=ORPO_WARMUP_STEPS,
+                weight_decay=ORPO_WEIGHT_DECAY,
+                lr_scheduler_type="cosine",
+                logging_steps=ORPO_LOGGING_STEPS,
+                save_strategy="steps",
+                save_steps=ORPO_SAVE_EVAL_STEPS,
+                save_total_limit=ORPO_SAVE_TOTAL_LIMIT,
+                remove_unused_columns=False,
+                fp16=False,
+                bf16=BF16,
+                optim=_optim_str_o,
+                label_smoothing_factor=ORPO_LABEL_SMOOTHING_FACTOR,  # 0.0 — WAJIB
+                gradient_checkpointing=True,
+                eval_strategy="steps",
+                eval_steps=ORPO_SAVE_EVAL_STEPS,
+                report_to="none",
+                predict_with_generate=ORPO_PREDICT_WITH_GENERATE,
+                generation_max_length=MAX_TARGET_LENGTH,
+            ),
+            train_dataset=joint_orpo_train_dataset,
+            eval_dataset=joint_orpo_eval_datasets,
+            data_collator=orpo_collator,
+            optimizers=_optimizers_o,
+            compute_metrics=make_compute_metrics(processor),
+            callbacks=[_plot_o, _progress_o, _smp_mm_o, _smp_to_o, _hub_o],
+        )
+        from transformers.utils.notebook import NotebookProgressCallback as _HFNPC2
+        joint_orpo_trainer.remove_callback(_HFNPC2)
+
+        # ---- Resume dari HF checkpoint ----
+        _resume_from_o = None
+        if _fresh_resume:
+            try:
+                from huggingface_hub import snapshot_download as _resume_snap_o
+                from huggingface_hub import HfApi as _ResumeApiO
+
+                _api_o = _ResumeApiO(token=os.environ.get("HF_TOKEN"))
+                _files_o = _api_o.list_repo_files(repo_id=UNIFIED_HF_REPO)
+
+                _ckpt_prefix_o = f"{JOINT_PREFIX}/orpo/checkpoint-"
+                _ckpts_o = list(set([f.split('/')[2] for f in _files_o if f.startswith(_ckpt_prefix_o)]))
+                if _ckpts_o:
+                    _ckpts_o.sort(key=lambda x: int(x.split('-')[1]))
+                    _latest_ckpt_o = _ckpts_o[-1]
+                else:
+                    _latest_ckpt_o = "checkpoint-*"
+
+                print(f"\n📥 [JOINT-ORPO] Downloading {_latest_ckpt_o} untuk resume...")
+                _resume_snap_o(
+                    repo_id=UNIFIED_HF_REPO,
+                    local_dir=joint_orpo_output_dir,
+                    allow_patterns=[f"{JOINT_PREFIX}/orpo/{_latest_ckpt_o}/**"],
+                    token=os.environ.get("HF_TOKEN"),
                 )
-            response = vision_processor.decode(outputs[0], skip_special_tokens=True)
-            print(f"User: [📷 Image] Halo Gemma, boleh tolong jelaskan apa menu makanan yang paling populer seharga di bawah 150 ribu berdasarkan brosur/menu ini?")
-            print(f"Assistant:\n{response}")
-        except Exception as e:
-            print(f"Gagal melakukan inferensi multimodal: {e}")
+                _sub_dir_o = os.path.join(joint_orpo_output_dir, JOINT_PREFIX, "orpo")
+                if os.path.exists(_sub_dir_o):
+                    import shutil as _shutil_ro
+                    for _item_o2 in os.listdir(_sub_dir_o):
+                        _src_o = os.path.join(_sub_dir_o, _item_o2)
+                        _dst_o = os.path.join(joint_orpo_output_dir, _item_o2)
+                        if os.path.isdir(_src_o) and _item_o2.startswith("checkpoint-"):
+                            if os.path.exists(_dst_o):
+                                _shutil_ro.rmtree(_dst_o)
+                            _shutil_ro.move(_src_o, _dst_o)
+                    _shutil_ro.rmtree(os.path.join(joint_orpo_output_dir, JOINT_PREFIX))
 
-        print("\n" + "=" * 70)
-        print("[VISION] TEST 2: Evaluasi Pemeliharaan Chat Umum (Text-Only - LITERALLY 100 Kueri dari Validation Sebelumnya)")
-        print("=" * 70)
+                _checkpoints_o = sorted([
+                    d for d in os.listdir(joint_orpo_output_dir)
+                    if d.startswith("checkpoint-") and os.path.isdir(os.path.join(joint_orpo_output_dir, d))
+                ])
+                if _checkpoints_o:
+                    _resume_from_o = True
+                    print(f"✅ [JOINT-ORPO] {len(_checkpoints_o)} checkpoint(s) ditemukan — resume!")
+                else:
+                    print("⚠️ [JOINT-ORPO] Tidak ada checkpoint valid — mulai dari awal.")
+            except Exception as e:
+                print(f"⚠️ [JOINT-ORPO] Gagal download checkpoint: {e}. Mulai dari awal.")
 
-        print("[VISION] Memuat dataset validasi percakapan teks sebelumnya...")
+        # ---- Train ----
+        print("\n🚀 [JOINT-ORPO] Starting JOINT ORPO training...")
+        joint_orpo_trainer.train(resume_from_checkpoint=_resume_from_o)
+
+        # ---- Save & upload final adapter ----
+        _final_path_o = os.path.join(joint_orpo_output_dir, "final_adapter")
+        print(f"\n💾 [JOINT-ORPO] Saving final adapter ke {_final_path_o}...")
+        joint_orpo_trainer.save_model(_final_path_o)
+        processor.save_pretrained(_final_path_o)
         try:
-            val_chat_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "chat_sft", split="validation")
-            val_indoqa_ds = load_dataset("daruokta/t5gemma2-indonesia-chat-formatted", "indoqa_sft", split="validation")
-
-            val_chat_samples = [dict(row) for row in val_chat_ds]
-            val_indoqa_samples = [dict(row) for row in val_indoqa_ds]
-
-            val_rows = _process_sft_rows_eval(val_chat_samples, vision_tokenizer, is_chat=True) + _process_sft_rows_eval(val_indoqa_samples, vision_tokenizer, is_chat=False)
-
-            # Samakan dengan seed 42 dan shuffle agar urutannya konsisten dengan baseline teks
-            random.seed(42)
-            random.shuffle(val_rows)
-
-            eval_generation_samples = val_rows[:100]
-            print(f"[VISION] Berhasil memuat dan memproses {len(eval_generation_samples)} sampel validasi teks.")
-
-            device = next(vision_model.parameters()).device
-            _eot_id = vision_tokenizer.convert_tokens_to_ids("<end_of_turn>")
-            _eos_id = vision_tokenizer.eos_token_id or 1
-            _stop_ids = list({_eot_id, _eos_id})
-
-            # Gunakan ALL_SUPPRESS_IDS yang dilewatkan sebagai argumen
-            bad_words_ids = [[id_] for id_ in ALL_SUPPRESS_IDS if id_ < vision_model.config.vocab_size]
-            pad_id = vision_tokenizer.pad_token_id if vision_tokenizer.pad_token_id is not None else _eos_id
-
-            for idx, sample in enumerate(eval_generation_samples):
-                input_tensor = torch.tensor([sample["input_ids"]], dtype=torch.long).to(device)
-                attention_mask = torch.ones_like(input_tensor).to(device)
-
-                with torch.no_grad():
-                    outputs_text = vision_model.generate(
-                        input_ids=input_tensor,
-                        attention_mask=attention_mask,
-                        max_new_tokens=1024,
-                        do_sample=True,
-                        temperature=0.7,
-                        top_p=0.9,
-                        repetition_penalty=1.2,
-                        eos_token_id=_stop_ids,
-                        pad_token_id=pad_id,
-                        bad_words_ids=bad_words_ids,
-                        use_cache=True
-                    )
-
-                query = vision_tokenizer.decode(sample["input_ids"], skip_special_tokens=True).strip()
-                target = vision_tokenizer.decode(sample["labels"], skip_special_tokens=True).strip()
-
-                raw_response = vision_tokenizer.decode(outputs_text[0], skip_special_tokens=True)
-                if raw_response.startswith(query):
-                    raw_response = raw_response[len(query):].strip()
-                response = raw_response.strip()
-
-                words = response.split()
-                is_repetitive = len(set(words)) < max(1, len(words) * 0.3) if words else True
-                flag = " ⚠️ REPETITIVE" if is_repetitive else ""
-
-                print(f"\n[Sampel {idx+1}/100]{flag}")
-                print(f"  Q: {query[:250]}...")
-                print(f"  Expected Target: {target[:200]}...")
-                print(f"  Model Generated: {response[:350]}...")
-
+            from huggingface_hub import HfApi as _FinalApiO
+            _final_api_o = _FinalApiO(token=os.environ.get("HF_TOKEN"))
+            _final_api_o.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
+            _final_api_o.upload_folder(
+                folder_path=_final_path_o,
+                repo_id=UNIFIED_HF_REPO,
+                path_in_repo=f"{JOINT_PREFIX}/orpo/final_adapter",
+                repo_type="model",
+            )
+            print("✅ [JOINT-ORPO] Final adapter ter-upload ke joint/orpo/final_adapter!")
         except Exception as e:
-            print(f"Gagal melakukan inferensi teks validasi 100 sampel: {e}")
-            traceback.print_exc()
+            print(f"⚠️ [JOINT-ORPO] Upload final adapter gagal: {e}")
 
-        print("=" * 70)
-
-    run_vision_eval()
     return
 
 
-# =====================================================================
-# VISION: MERGE & QUANTIZE
-# =====================================================================
+# #####################################################################
+#   FINAL — MERGE & QUANTIZE -> final/merged_bf16 + final/quantized_4bit
+# #####################################################################
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ---
+    # 📦 Final Merge & Quantize
+    LoRA hasil ORPO di-merge **sekali** (menghindari degradasi double-merge v6)
+    menjadi `final/merged_bf16` + `final/quantized_4bit` di unified repo.
+    """)
+    return
+
+
 @app.cell
 def _(
-    VISION_HF_CHECKPOINT_REPO,
-    VISION_HF_PREFIX,
-    VISION_LOAD_IN_4BIT,
-    VISION_MODEL_NAME,
-    VISION_OUTPUT_DIR,
-    VISION_SUBFOLDER,
-    mo,
+    CANGKOK_SUBFOLDER,
+    FINAL_PREFIX,
+    JOINT_PREFIX,
+    LOAD_IN_4BIT,
+    OUTPUT_DIR,
+    UNIFIED_HF_REPO,
+    gc,
+    model,
     os,
-    vision_current_stage,
-    vision_model,
-    vision_processor,
-    vision_tokenizer,
+    processor,
+    torch,
+    tokenizer,
 ):
-    mo.stop(
-        vision_current_stage != "done" and vision_model is None,
-        mo.md("⏭️ **[VISION] Phase 2 belum selesai (SFT/ORPO masih berjalan).** Merge dilewati — re-run notebook setelah ORPO selesai."),
+    from huggingface_hub import HfApi as _MergeApi
+
+    _token = os.environ.get("HF_TOKEN")
+    _api = _MergeApi(token=_token)
+    _files = _api.list_repo_files(UNIFIED_HF_REPO)
+
+    _final_exists = any(
+        f.startswith(f"{FINAL_PREFIX}/merged_bf16/") and f.endswith("config.json")
+        for f in _files
+    )
+    _orpo_adapter_exists = any(
+        f.startswith(f"{JOINT_PREFIX}/orpo/final_adapter/") for f in _files
     )
 
-    def vision_merge_and_quantize(vision_model, vision_tokenizer, vision_processor, upload_dir: str):
+    _should_merge = (model is not None or _orpo_adapter_exists) and not _final_exists
+    final_upload_dir = os.path.join(OUTPUT_DIR, "hf_upload")
+
+    if not _should_merge:
+        print(
+            "⏭️ [MERGE] Dilewati — "
+            + (
+                f"`{FINAL_PREFIX}/merged_bf16` sudah ada di repo."
+                if _final_exists
+                else "adapter ORPO belum ada & model tidak dimuat (training belum selesai)."
+            )
+        )
+    else:
         import unsloth_zoo.saving_utils
         unsloth_zoo.saving_utils.assert_same_keys = lambda *args, **kwargs: None  # type: ignore
 
         # --- Workaround: unsloth_zoo `_infer_prefix_and_remap` UnboundLocalError ---
-        # Versi unsloth_zoo (lama) yang terinstal tidak menginisialisasi
-        # `unmatched_keys = []` sebelum cek `if unmatched_keys:` pertama. Saat SEMUA
-        # key LoRA sudah cocok langsung dengan key safetensor (tidak ada unmatched key
-        # yang tercipta -> cabang `else` tidak pernah jalan), variabel `unmatched_keys`
-        # tidak pernah di-assign sehingga `if unmatched_keys:` melempar
-        # `UnboundLocalError: cannot access local variable 'unmatched_keys'`.
-        # Bug ini SUDAH diperbaiki di upstream (unsloth-zoo main menambah
-        # `unmatched_keys = []` sebelum loop). Di sini kita bungkus fungsi terinstal
-        # lalu fallback ke reimplementation minimal yang sudah di-fix ketika error
-        # spesifik itu muncul, agar save_pretrained_merged("merged_16bit") sukses.
+        # Versi unsloth_zoo yang terinstal tidak menginisialisasi `unmatched_keys = []`
+        # sebelum cek `if unmatched_keys:` pertama. Saat SEMUA key LoRA langsung cocok,
+        # variabel itu tidak pernah ter-assign -> UnboundLocalError. Diperbaiki di
+        # upstream; di sini dipatch via wrapper + fallback reimplementation.
         _sz = unsloth_zoo.saving_utils
         if not getattr(_sz, "_unmatched_keys_patch_applied", False):
             from collections import defaultdict as _ddp
             _orig_infer = getattr(_sz, "_infer_prefix_and_remap", None)
 
             def _infer_prefix_and_remap_fixed(lora_weights, safetensor_keys):
-                # Reimplementasi minimal dari _infer_prefix_and_remap (upstream main)
-                # dengan inisialisasi `unmatched_keys = []` yang menjadi root cause fix.
                 if not safetensor_keys:
                     return None
                 sf_key_set = set(safetensor_keys)
@@ -5255,11 +3686,9 @@ def _(
                     if not isinstance(k, str):
                         remapped[k] = v
                         continue
-                    # Sudah cocok langsung dengan key safetensor (.weight / .linear.weight)
                     if (k + ".weight") in sf_key_set or (k + ".linear.weight") in sf_key_set:
                         remapped[k] = v
                         continue
-                    # Cari kandidat prefix unik
                     candidates = list(dict.fromkeys(
                         sf_key[: -len(suffix)]
                         for suffix in (k + ".weight", k + ".linear.weight")
@@ -5271,11 +3700,8 @@ def _(
                         changed = True
                     else:
                         unmatched_keys.append((k, v))
-                # Tidak ada perubahan sama sekali -> sinyalkan "tidak perlu remap"
                 if not changed and not unmatched_keys:
                     return None
-                # Untuk key yang benar-benar tak ter-match, biarkan apa adanya
-                # (merge akan skip target tanpa backing tensor) -> konservatif & aman.
                 for k, v in unmatched_keys:
                     remapped[k] = v
                 return remapped
@@ -5287,8 +3713,8 @@ def _(
                     except UnboundLocalError as e:
                         if "unmatched_keys" in str(e):
                             print(
-                                f"⚠️ [patch] _infer_prefix_and_remap UnboundLocalError "
-                                f"({e}); memakai fallback reimplementation yang sudah di-fix."
+                                f"⚠️ [patch] _infer_prefix_and_remap UnboundLocalError ({e}); "
+                                "memakai fallback reimplementation."
                             )
                             return _infer_prefix_and_remap_fixed(lora_weights, safetensor_keys)
                         raise
@@ -5296,150 +3722,268 @@ def _(
 
             setattr(_sz, "_infer_prefix_and_remap", _patched_infer)
             setattr(_sz, "_unmatched_keys_patch_applied", True)
-            print("✅ [patch] Workaround `_infer_prefix_and_remap` UnboundLocalError terpasang.")
+            print("✅ [patch] Workaround `_infer_prefix_and_remap` terpasang.")
 
-        if vision_model is None:
-            from unsloth import FastVisionModel
+        _model_to_merge = model
+        _merge_tokenizer = tokenizer
+        _merge_processor = processor
 
-            # Load model dari adapter ORPO final
-            _orpo_path = os.path.join(VISION_OUTPUT_DIR, "orpo", "final_adapter")
+        if _model_to_merge is None:
+            from unsloth import FastVisionModel as _FVMerge
+
+            _orpo_path = os.path.join(OUTPUT_DIR, JOINT_PREFIX, "orpo", "final_adapter")
             if not os.path.exists(_orpo_path):
-                # Fallback download dari HF
-                from huggingface_hub import snapshot_download as _snap_dl
-                print("📥 [VISION] Downloading final ORPO adapter dari HF untuk merging...")
-                _snap_dl(
-                    repo_id=VISION_HF_CHECKPOINT_REPO,
+                from huggingface_hub import snapshot_download as _merge_snap
+                print("📥 [MERGE] Downloading joint/orpo/final_adapter dari HF untuk merging...")
+                _merge_snap(
+                    repo_id=UNIFIED_HF_REPO,
                     local_dir=_orpo_path,
-                    allow_patterns=[f"{VISION_HF_PREFIX}/orpo/final_adapter/**"],
-                    token=os.environ.get("HF_TOKEN"),
+                    allow_patterns=[f"{JOINT_PREFIX}/orpo/final_adapter/**"],
+                    token=_token,
                 )
-                _sub_path = os.path.join(_orpo_path, VISION_HF_PREFIX, "orpo", "final_adapter")
+                _sub_path = os.path.join(_orpo_path, JOINT_PREFIX, "orpo", "final_adapter")
                 if os.path.exists(_sub_path):
-                    import shutil as _shutil_merge
-                    for _item in os.listdir(_sub_path):
-                        _src = os.path.join(_sub_path, _item)
-                        _dst = os.path.join(_orpo_path, _item)
-                        if os.path.exists(_dst):
-                            if os.path.isdir(_dst):
-                                _shutil_merge.rmtree(_dst)
+                    import shutil as _shutil_m
+                    for _mi in os.listdir(_sub_path):
+                        _src_m = os.path.join(_sub_path, _mi)
+                        _dst_m = os.path.join(_orpo_path, _mi)
+                        if os.path.exists(_dst_m):
+                            if os.path.isdir(_dst_m):
+                                _shutil_m.rmtree(_dst_m)
                             else:
-                                os.remove(_dst)
-                        _shutil_merge.move(_src, _dst)
-                    _shutil_merge.rmtree(os.path.join(_orpo_path, VISION_HF_PREFIX))
+                                os.remove(_dst_m)
+                        _shutil_m.move(_src_m, _dst_m)
+                    _shutil_m.rmtree(os.path.join(_orpo_path, JOINT_PREFIX))
 
-            print(f"📂 [VISION] Loading model dari ORPO adapter untuk merge: {_orpo_path}")
-            vision_model, vision_tokenizer = FastVisionModel.from_pretrained(
+            print(f"📂 [MERGE] Loading model dari ORPO adapter: {_orpo_path}")
+            _model_to_merge, _merge_tokenizer = _FVMerge.from_pretrained(
                 model_name=_orpo_path,
-                load_in_4bit=VISION_LOAD_IN_4BIT,
+                load_in_4bit=LOAD_IN_4BIT,
                 use_gradient_checkpointing="unsloth",
-                token=os.environ.get("HF_TOKEN"),
+                token=_token,
             )
-            from transformers import AutoProcessor as _AutoProcMerge
-            vision_processor = _AutoProcMerge.from_pretrained(
-                VISION_MODEL_NAME, subfolder=VISION_SUBFOLDER,
-                token=os.environ.get("HF_TOKEN"),
+            from transformers import AutoProcessor as _MergeProc
+            _merge_processor = _MergeProc.from_pretrained(
+                UNIFIED_HF_REPO, subfolder=CANGKOK_SUBFOLDER, token=_token
             )
-            from unsloth.chat_templates import get_chat_template
-            vision_tokenizer = get_chat_template(vision_tokenizer, chat_template="gemma-3")
-            vision_processor.chat_template = vision_tokenizer.chat_template
-            if hasattr(vision_processor, "tokenizer"):
-                vision_processor.tokenizer.chat_template = vision_tokenizer.chat_template
+            from unsloth.chat_templates import get_chat_template as _gct
+            _merge_tokenizer = _gct(_merge_tokenizer, chat_template="gemma-3")
+            _merge_processor.chat_template = _merge_tokenizer.chat_template
+            if hasattr(_merge_processor, "tokenizer"):
+                _merge_processor.tokenizer.chat_template = _merge_tokenizer.chat_template
 
-        merged_bf16_path = os.path.join(upload_dir, "merged_bf16")
-        quantized_4bit_path = os.path.join(upload_dir, "quantized_4bit")
+        merged_bf16_path = os.path.join(final_upload_dir, "merged_bf16")
+        quantized_4bit_path = os.path.join(final_upload_dir, "quantized_4bit")
 
-        print("[VISION] Merging LoRA adapter and saving model as BF16 using Unsloth...")
-        vision_model.save_pretrained_merged(merged_bf16_path, vision_tokenizer, save_method="merged_16bit")
-        vision_tokenizer.save_pretrained(merged_bf16_path)
-        vision_processor.save_pretrained(merged_bf16_path)
-        print("✅ [VISION] Model BF16 berhasil disimpan.")
+        print("[MERGE] Merging LoRA adapter → BF16 (merged_16bit)...")
+        _model_to_merge.save_pretrained_merged(merged_bf16_path, _merge_tokenizer, save_method="merged_16bit")
+        _merge_tokenizer.save_pretrained(merged_bf16_path)
+        _merge_processor.save_pretrained(merged_bf16_path)
+        print("✅ [MERGE] Model BF16 tersimpan.")
 
-        print("\n[VISION] Merging LoRA adapter and saving model as 4-bit NF4 using Unsloth...")
-        vision_model.save_pretrained_merged(quantized_4bit_path, vision_tokenizer, save_method="merged_4bit_forced")
-        vision_tokenizer.save_pretrained(quantized_4bit_path)
-        vision_processor.save_pretrained(quantized_4bit_path)
-        print("✅ [VISION] Model 4-bit NF4 berhasil disimpan!")
+        print("\n[MERGE] Merging LoRA adapter → 4-bit NF4 (merged_4bit_forced)...")
+        _model_to_merge.save_pretrained_merged(quantized_4bit_path, _merge_tokenizer, save_method="merged_4bit_forced")
+        _merge_tokenizer.save_pretrained(quantized_4bit_path)
+        _merge_processor.save_pretrained(quantized_4bit_path)
+        print("✅ [MERGE] Model 4-bit NF4 tersimpan!")
 
-        return None
-
-    vision_upload_dir = os.path.join(VISION_OUTPUT_DIR, "hf_upload")
-    vision_merge_and_quantize(vision_model, vision_tokenizer, vision_processor, vision_upload_dir)
-    return (vision_upload_dir,)
+    return (final_upload_dir,)
 
 
 @app.cell
-def _(VISION_HF_CHECKPOINT_REPO, VISION_HF_PREFIX, os, vision_upload_dir):
-    from huggingface_hub import HfApi as _UploadMergedApi
+def _(FINAL_PREFIX, UNIFIED_HF_REPO, final_upload_dir, os):
+    from huggingface_hub import HfApi as _UpFinalApi
 
-    print(f"[VISION] Memulai proses unggah model merged ke HF Hub: {VISION_HF_CHECKPOINT_REPO}/{VISION_HF_PREFIX}...")
-    try:
-        _merged_api = _UploadMergedApi(token=os.environ.get("HF_TOKEN"))
+    _has_merged = os.path.exists(os.path.join(final_upload_dir, "merged_bf16", "config.json"))
+    if not _has_merged:
+        print("⏭️ [UPLOAD] Tidak ada hasil merge lokal — upload final dilewati.")
+    else:
+        print(f"[UPLOAD] Mengunggah hasil merge ke {UNIFIED_HF_REPO}/{FINAL_PREFIX}...")
+        try:
+            _final_up_api = _UpFinalApi(token=os.environ.get("HF_TOKEN"))
+            _final_up_api.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
 
-        # Ensure target model repository exists before uploading merged folder
-        _merged_api.create_repo(repo_id=VISION_HF_CHECKPOINT_REPO, repo_type="model", private=False, exist_ok=True)
+            _final_up_api.upload_folder(
+                folder_path=final_upload_dir,
+                path_in_repo=FINAL_PREFIX,
+                repo_id=UNIFIED_HF_REPO,
+                repo_type="model",
+            )
 
-        _merged_api.upload_folder(
-            folder_path=vision_upload_dir,
-            path_in_repo=VISION_HF_PREFIX,
-            repo_id=VISION_HF_CHECKPOINT_REPO,
-            repo_type="model",
-        )
-
-        print("✅ [VISION] Berhasil mengunggah merged models ke Hugging Face Hub!")
-    except Exception as e:
-        print(f"❌ [VISION] Terjadi kesalahan saat mengunggah: {e}")
+            print("✅ [UPLOAD] final/merged_bf16 & final/quantized_4bit ter-upload!")
+        except Exception as e:
+            print(f"❌ [UPLOAD] Terjadi kesalahan saat mengunggah: {e}")
     return
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
+def _(UNIFIED_HF_REPO, mo):
+    mo.md(f"""
     ---
-    ### 💻 [VISION] Local Deployment & Inference (Unified Repo, Subfolder `vision/`)
-    Setelah model VISION diunggah ke **unified repo**, artifacts berada di bawah prefix `vision/`:
-    - `vision/sft/` — Checkpoint dan artifacts SFT vision
-    - `vision/orpo/` — Checkpoint dan artifacts ORPO vision
-    - `vision/merged_bf16/` — **HASIL AKHIR** multimodal utuh (bfloat16, ~15 GB)
-    - `vision/quantized_4bit/` — **HASIL AKHIR** terkuantisasi (NF4, ~5 GB)
+    ### 💻 Deployment & Inference (Unified Repo)
+    Repo: **`{UNIFIED_HF_REPO}`** (PUBLIC)
 
-    #### Load Model Quantized 4-bit:
+    ```
+    steered/            → checkpoint Phase 0.5 (Task Vector Steering)
+    cangkok/            → checkpoint Phase 1.5 (SigLIP+projector graft, base training)
+    joint/sft/          → checkpoints + final_adapter SFT joint
+    joint/orpo/         → checkpoints + final_adapter ORPO joint
+    final/merged_bf16/  → 🏁 model akhir bfloat16 (~15 GB)
+    final/quantized_4bit/ → model akhir NF4 (~5 GB)
+    ```
+
+    #### Load Model Final 4-bit:
     ```python
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, AutoProcessor
 
-    model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v6-combined-unsloth"
+    model_id = "{UNIFIED_HF_REPO}"
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="vision/quantized_4bit")
-    processor = AutoProcessor.from_pretrained(model_id, subfolder="vision/quantized_4bit")
+    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="final/quantized_4bit")
+    processor = AutoProcessor.from_pretrained(model_id, subfolder="final/quantized_4bit")
     model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_id, subfolder="vision/quantized_4bit", device_map="auto"
+        model_id, subfolder="final/quantized_4bit", device_map="auto"
     )
     ```
 
-    #### Load Model Full Precision (BF16):
+    #### Load Model Final BF16:
     ```python
     import torch
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, AutoProcessor
 
-    model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v6-combined-unsloth"
+    model_id = "{UNIFIED_HF_REPO}"
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="vision/merged_bf16")
-    processor = AutoProcessor.from_pretrained(model_id, subfolder="vision/merged_bf16")
+    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="final/merged_bf16")
+    processor = AutoProcessor.from_pretrained(model_id, subfolder="final/merged_bf16")
     model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_id, subfolder="vision/merged_bf16",
+        model_id, subfolder="final/merged_bf16",
         torch_dtype=torch.bfloat16, device_map="auto"
     )
     ```
-
-    #### Load Model Cangkok (base vision, sebelum adapter):
-    ```python
-    model_id = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v6-combined-unsloth"
-    tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="cangkok")
-    processor = AutoProcessor.from_pretrained(model_id, subfolder="cangkok")
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_id, subfolder="cangkok", torch_dtype=torch.bfloat16, device_map="auto"
-    )
-    ```
     """)
+    return
+
+
+# =====================================================================
+# POST-TRAINING EVAL (uji multimodal + 100 kueri teks dari validation)
+# =====================================================================
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ---
+    ## 🧪 Evaluasi Pasca-Training (berjalan hanya jika model masih di memori)
+    """)
+    return
+
+
+@app.cell
+def _(
+    ALL_SUPPRESS_IDS,
+    DATASET_TEXT_REPO,
+    TEXT_CHAT_CONFIG,
+    TEXT_INDOQA_CONFIG,
+    format_encoder_from_raw,
+    load_dataset,
+    model,
+    processor,
+    random,
+    torch,
+    traceback,
+):
+    if model is not None:
+        print("\n" + "=" * 70)
+        print("[EVAL] TEST 1: Inferensi multimodal (dummy image)")
+        print("=" * 70)
+
+        test_messages = [
+            {"role": "system", "content": "Kamu adalah Gemma, asisten AI cerdas berbahasa Indonesia. Berikan respons yang akurat, ramah, dan terstruktur."},
+            {"role": "user", "content": [
+                {"type": "image"},
+                {"type": "text", "text": "Halo Gemma, boleh tolong jelaskan isi gambar ini secara singkat?"}
+            ]}
+        ]
+
+        from PIL import Image as PILImageEval
+        dummy_img = PILImageEval.new("RGB", (224, 224), color="blue")
+
+        try:
+            prompt = processor.apply_chat_template(test_messages, tokenize=False, add_generation_prompt=True)
+            inputs = processor(text=prompt, images=dummy_img, return_tensors="pt")
+
+            device = next(model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=256,
+                    do_sample=True,
+                    temperature=0.7, top_p=0.9, use_cache=True
+                )
+            response = processor.decode(outputs[0], skip_special_tokens=True)
+            print(f"User: [📷 Image] Halo Gemma, boleh tolong jelaskan isi gambar ini secara singkat?")
+            print(f"Assistant:\n{response}")
+        except Exception as e:
+            print(f"Gagal inferensi multimodal: {e}")
+
+        print("\n" + "=" * 70)
+        print("[EVAL] TEST 2: Pemeliharaan chat teks (20 kueri pertama dari validation)")
+        print("=" * 70)
+
+        try:
+            val_chat_ds = load_dataset(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, split="validation")
+            val_indoqa_ds = load_dataset(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, split="validation")
+
+            _val_rows = []
+            for _row in [dict(r) for r in val_chat_ds] + [dict(r) for r in val_indoqa_ds]:
+                _val_rows.append({
+                    "prompt_text": format_encoder_from_raw(_row.get("input", "")),
+                    "target_text": _row.get("target", "").strip(),
+                })
+            random.seed(42)
+            random.shuffle(_val_rows)
+            eval_samples = _val_rows[:20]
+            print(f"[EVAL] {len(eval_samples)} sampel validasi teks dimuat.")
+
+            device = next(model.parameters()).device
+            _eot_id = processor.tokenizer.convert_tokens_to_ids("<end_of_turn>")
+            _eos_id = processor.tokenizer.eos_token_id or 1
+            _stop_ids = list({_eot_id, _eos_id})
+            bad_words_ids = [[id_] for id_ in ALL_SUPPRESS_IDS if id_ < model.config.vocab_size]
+            pad_id = processor.tokenizer.pad_token_id or _eos_id
+
+            for idx, sample in enumerate(eval_samples):
+                inputs = processor(text=sample["prompt_text"], return_tensors="pt").to(device)
+                with torch.no_grad():
+                    outputs_text = model.generate(
+                        **inputs,
+                        max_new_tokens=256,
+                        do_sample=True,
+                        temperature=0.7,
+                        top_p=0.9,
+                        repetition_penalty=1.2,
+                        eos_token_id=_stop_ids,
+                        pad_token_id=pad_id,
+                        bad_words_ids=bad_words_ids,
+                        use_cache=True
+                    )
+                raw_response = processor.decode(outputs_text[0], skip_special_tokens=True)
+                query = sample["prompt_text"].strip()
+                if raw_response.startswith(query):
+                    raw_response = raw_response[len(query):].strip()
+                response = raw_response.strip()
+
+                print(f"\n[Sampel {idx+1}/{len(eval_samples)}]")
+                print(f"  Q: {query[:200]}...")
+                print(f"  Target: {sample['target_text'][:150]}...")
+                print(f"  Model: {response[:300]}...")
+
+        except Exception as e:
+            print(f"Gagal inferensi teks: {e}")
+            traceback.print_exc()
+
+        print("=" * 70)
+    else:
+        print("⏭️ [EVAL] Model tidak di memori (training belum jalan di sesi ini) — eval dilewati.")
     return
 
 
