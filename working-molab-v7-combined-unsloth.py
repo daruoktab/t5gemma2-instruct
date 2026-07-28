@@ -100,14 +100,20 @@ def _():
     RUN_SFT = True                # False = skip Phase 2.1 (langsung cek ORPO/merge)
     RUN_ORPO = True               # False = stop setelah SFT
 
-    # =====================================================================
-    # 1C. STEERING HYPERPARAMS (Phase 0.5) — merged-attention-aware
-    # =====================================================================
-    STEERING_ALPHA_FFN = 0.15     # gate/up/down — optimal (subtle IT initialization without logit drift)
+    # α per kelompok modul — merged-attention-aware & layer-wise ramp-up:
+    STEERING_ALPHA_MODE = "layer_ramp"  # "layer_ramp" (SOTA optimal) | "uniform"
+    STEERING_ALPHA_FFN_EARLY = 0.05     # Layer awal (< 25% depth) — subtle
+    STEERING_ALPHA_FFN_MID   = 0.25     # Layer tengah (25%-80% depth) — peak IT reasoning & knowledge
+    STEERING_ALPHA_FFN_LATE  = 0.08     # Layer akhir (> 80% depth) — menjaga kalibrasi output
+    STEERING_ALPHA_NORM_EARLY = 0.02
+    STEERING_ALPHA_NORM_MID   = 0.08
+    STEERING_ALPHA_NORM_LATE  = 0.03
+
+    STEERING_ALPHA_FFN = 0.15     # fallback uniform value
     STEERING_ALPHA_QO = 0.0       # q_proj & o_proj — WAJIB 0.0 untuk keamanan Merged Attention [X;H]
     STEERING_ALPHA_KV = 0.0       # k_proj & v_proj — WAJIB 0.0 (joint projection [X;H])
     STEERING_ALPHA_QKNORM = 0.0   # q_norm & k_norm — terikat kalibrasi joint softmax
-    STEERING_ALPHA_NORM = 0.05    # RMSNorm layer (subtle 1D scaling)
+    STEERING_ALPHA_NORM = 0.05    # RMSNorm layer fallback
     STEERING_SMOKE_TEST = True    # generate 3 prompt singkat untuk sanity check hasil steering
 
     # =====================================================================
@@ -1268,8 +1274,15 @@ def _(
     GEMMA_IT_MODEL,
     STEERED_SUBFOLDER,
     STEERING_ALPHA_FFN,
+    STEERING_ALPHA_FFN_EARLY,
+    STEERING_ALPHA_FFN_LATE,
+    STEERING_ALPHA_FFN_MID,
     STEERING_ALPHA_KV,
+    STEERING_ALPHA_MODE,
     STEERING_ALPHA_NORM,
+    STEERING_ALPHA_NORM_EARLY,
+    STEERING_ALPHA_NORM_LATE,
+    STEERING_ALPHA_NORM_MID,
     STEERING_ALPHA_QKNORM,
     STEERING_ALPHA_QO,
     STEERING_FORCE,
@@ -1384,11 +1397,27 @@ def _(
                         _mismatch.append(f"missing key: {g_suf} / {t_suf}")
 
                 for _l in range(_L):
+                    # Layer-Wise Ramp-Up Alpha Calculation
+                    if STEERING_ALPHA_MODE == "layer_ramp":
+                        _depth_ratio = _l / float(_L)
+                        if _depth_ratio < 0.25:
+                            _curr_alpha_ffn = STEERING_ALPHA_FFN_EARLY
+                            _curr_alpha_norm = STEERING_ALPHA_NORM_EARLY
+                        elif _depth_ratio < 0.80:
+                            _curr_alpha_ffn = STEERING_ALPHA_FFN_MID
+                            _curr_alpha_norm = STEERING_ALPHA_NORM_MID
+                        else:
+                            _curr_alpha_ffn = STEERING_ALPHA_FFN_LATE
+                            _curr_alpha_norm = STEERING_ALPHA_NORM_LATE
+                    else:
+                        _curr_alpha_ffn = STEERING_ALPHA_FFN
+                        _curr_alpha_norm = STEERING_ALPHA_NORM
+
                     # FFN — aman penuh
                     for _proj in ("gate_proj", "up_proj", "down_proj"):
                         _steer(f"layers.{_l}.mlp.{_proj}.weight",
                                f"decoder.layers.{_l}.mlp.{_proj}.weight",
-                               STEERING_ALPHA_FFN, "ffn")
+                               _curr_alpha_ffn, "ffn")
                     # Attention projections
                     for _proj, _a in (
                         ("q_proj", STEERING_ALPHA_QO),
@@ -1413,7 +1442,7 @@ def _(
                     ):
                         _steer(f"layers.{_l}.{_g_suf}.weight",
                                f"decoder.layers.{_l}.{_t_suf}.weight",
-                               STEERING_ALPHA_NORM, "layernorm")
+                               _curr_alpha_norm, "layernorm")
 
                 # Final decoder norm
                 _steer("norm.weight", "decoder.norm.weight", STEERING_ALPHA_NORM, "final_norm")
