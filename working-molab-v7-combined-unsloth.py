@@ -103,11 +103,11 @@ def _():
     # =====================================================================
     # 1C. STEERING HYPERPARAMS (Phase 0.5) — merged-attention-aware
     # =====================================================================
-    STEERING_ALPHA_FFN = 0.8      # gate/up/down — aman penuh (token-wise, tak sentuh [X;H])
+    STEERING_ALPHA_FFN = 0.15     # gate/up/down — optimal (subtle IT initialization without logit drift)
     STEERING_ALPHA_QO = 0.0       # q_proj & o_proj — WAJIB 0.0 untuk keamanan Merged Attention [X;H]
     STEERING_ALPHA_KV = 0.0       # k_proj & v_proj — WAJIB 0.0 (joint projection [X;H])
     STEERING_ALPHA_QKNORM = 0.0   # q_norm & k_norm — terikat kalibrasi joint softmax
-    STEERING_ALPHA_NORM = 0.3     # RMSNorm layer (pre/post attn, pre/post ff, final norm)
+    STEERING_ALPHA_NORM = 0.05    # RMSNorm layer (subtle 1D scaling)
     STEERING_SMOKE_TEST = True    # generate 3 prompt singkat untuk sanity check hasil steering
 
     # =====================================================================
