@@ -33,3 +33,6 @@ skills-lock.json
 # Agent tooling configs (may contain API keys)
 opencode.json
 /.commandcode/
+
+# Knowledge graph output
+graphify-out/
