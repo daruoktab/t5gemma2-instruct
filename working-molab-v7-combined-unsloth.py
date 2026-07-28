@@ -1357,14 +1357,22 @@ def _(
                 _L = min(_t5_layers, _g_layers)
                 print(f"\n  Decoder layers: T5Gemma={_t5_layers}, Gemma3={_g_layers} → steer {_L} layers pertama")
 
-                # ---- 2. Steering dengan mapping eksplisit + shape guard ----
+                # ---- 2. Steering dengan mapping eksplisit + dynamic suffix matcher ----
                 _counts = {}
                 _mismatch = []
 
-                def _steer(g_key, t_key, alpha, cat):
+                def _find_key(sd, suffix):
+                    for k in sd.keys():
+                        if k.endswith(suffix):
+                            return k
+                    return None
+
+                def _steer(g_suf, t_suf, alpha, cat):
                     if alpha == 0:
                         return
-                    if g_key in _gi_sd and g_key in _gb_sd and t_key in _t5_sd:
+                    g_key = _find_key(_gi_sd, g_suf)
+                    t_key = _find_key(_t5_sd, t_suf)
+                    if g_key and g_key in _gb_sd and t_key:
                         if _t5_sd[t_key].shape == _gi_sd[g_key].shape == _gb_sd[g_key].shape:
                             _t5_sd[t_key] += alpha * (_gi_sd[g_key] - _gb_sd[g_key])
                             _counts[cat] = _counts.get(cat, 0) + 1
@@ -1373,13 +1381,13 @@ def _(
                                 f"{t_key}: t5{tuple(_t5_sd[t_key].shape)} vs gemma{tuple(_gi_sd[g_key].shape)}"
                             )
                     else:
-                        _mismatch.append(f"missing key: {g_key} / {t_key}")
+                        _mismatch.append(f"missing key: {g_suf} / {t_suf}")
 
                 for _l in range(_L):
                     # FFN — aman penuh
                     for _proj in ("gate_proj", "up_proj", "down_proj"):
-                        _steer(f"model.layers.{_l}.mlp.{_proj}.weight",
-                               f"model.decoder.layers.{_l}.mlp.{_proj}.weight",
+                        _steer(f"layers.{_l}.mlp.{_proj}.weight",
+                               f"decoder.layers.{_l}.mlp.{_proj}.weight",
                                STEERING_ALPHA_FFN, "ffn")
                     # Attention projections
                     for _proj, _a in (
@@ -1388,13 +1396,13 @@ def _(
                         ("k_proj", STEERING_ALPHA_KV),
                         ("v_proj", STEERING_ALPHA_KV),
                     ):
-                        _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
-                               f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
+                        _steer(f"layers.{_l}.self_attn.{_proj}.weight",
+                               f"decoder.layers.{_l}.self_attn.{_proj}.weight",
                                _a, f"attn.{_proj}")
                     # q_norm / k_norm
                     for _proj in ("q_norm", "k_norm"):
-                        _steer(f"model.layers.{_l}.self_attn.{_proj}.weight",
-                               f"model.decoder.layers.{_l}.self_attn.{_proj}.weight",
+                        _steer(f"layers.{_l}.self_attn.{_proj}.weight",
+                               f"decoder.layers.{_l}.self_attn.{_proj}.weight",
                                STEERING_ALPHA_QKNORM, f"attn.{_proj}")
                     # RMSNorms (Gemma input_layernorm→T5 pre_self_attn, post_attention→post_self_attn)
                     for _g_suf, _t_suf in (
@@ -1403,12 +1411,12 @@ def _(
                         ("pre_feedforward_layernorm", "pre_feedforward_layernorm"),
                         ("post_feedforward_layernorm", "post_feedforward_layernorm"),
                     ):
-                        _steer(f"model.layers.{_l}.{_g_suf}.weight",
-                               f"model.decoder.layers.{_l}.{_t_suf}.weight",
+                        _steer(f"layers.{_l}.{_g_suf}.weight",
+                               f"decoder.layers.{_l}.{_t_suf}.weight",
                                STEERING_ALPHA_NORM, "layernorm")
 
                 # Final decoder norm
-                _steer("model.norm.weight", "model.decoder.norm.weight", STEERING_ALPHA_NORM, "final_norm")
+                _steer("norm.weight", "decoder.norm.weight", STEERING_ALPHA_NORM, "final_norm")
 
                 _total = sum(_counts.values())
                 print(f"\n  ✅ Steered {_total} tensors: {_counts}")
