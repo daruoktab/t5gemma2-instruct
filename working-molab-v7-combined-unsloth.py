@@ -509,7 +509,8 @@ def _():
 
     # ---- LOGIT MASKING (decoder lm_head) ----
     def apply_logit_mask(model, suppress_ids):
-        vs = model.config.vocab_size
+        _cfg = getattr(model, "config", model)
+        vs = getattr(_cfg, "vocab_size", getattr(getattr(_cfg, "text_config", None), "vocab_size", getattr(getattr(_cfg, "decoder", None), "vocab_size", 262144)))
         sl = [i for i in suppress_ids if i < vs]
         mask = torch.zeros(vs, dtype=torch.bfloat16)
         mask[sl] = -10000.0
@@ -3016,8 +3017,10 @@ def _(
             print("[JOINT-SFT] Optimizer: paged_adamw_8bit (dibangun Trainer)")
 
         # ---- Callbacks ----
+        _cfg_sft = getattr(model, "config", None)
+        _v_size_sft = getattr(_cfg_sft, "vocab_size", getattr(getattr(_cfg_sft, "text_config", None), "vocab_size", getattr(getattr(_cfg_sft, "decoder", None), "vocab_size", 262144)))
         _bad_words_ids = [
-            [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, model).config.vocab_size
+            [id_] for id_ in ALL_SUPPRESS_IDS if id_ < _v_size_sft
         ]
         _plot_cb = VisionTrainingPlotCallback(output_dir=joint_sft_output_dir)
         _progress_cb = CleanNotebookProgressCallback()
@@ -3514,8 +3517,10 @@ def _(
             _optim_str_o = "paged_adamw_8bit"
             print("[JOINT-ORPO] Optimizer: paged_adamw_8bit (dibangun Trainer)")
 
+        _cfg_orpo = getattr(model, "config", None)
+        _v_size_o = getattr(_cfg_orpo, "vocab_size", getattr(getattr(_cfg_orpo, "text_config", None), "vocab_size", getattr(getattr(_cfg_orpo, "decoder", None), "vocab_size", 262144)))
         _bad_words_o = [
-            [id_] for id_ in ALL_SUPPRESS_IDS if id_ < cast(Any, model).config.vocab_size
+            [id_] for id_ in ALL_SUPPRESS_IDS if id_ < _v_size_o
         ]
         _plot_o = VisionTrainingPlotCallback(output_dir=joint_orpo_output_dir)
         _progress_o = CleanNotebookProgressCallback()
