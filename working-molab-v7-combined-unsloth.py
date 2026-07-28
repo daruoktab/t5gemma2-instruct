@@ -21,6 +21,7 @@
 #     "torchvision==0.27.1",
 #     "trl==1.9.2",
 #     "transformers==5.14.1",
+#     "tokenicer==0.0.14",
 #     "unsloth_zoo @ git+https://github.com/daruoktab/unsloth-zoo.git",
 #     "unsloth @ git+https://github.com/daruoktab/unsloth.git",
 # ]
@@ -1875,9 +1876,20 @@ def _(
         if hasattr(model, "generation_config") and model.generation_config is not None:
             model.generation_config.max_length = None
 
-        processor = AutoProcessor.from_pretrained(
-            UNIFIED_HF_REPO, subfolder=CANGKOK_SUBFOLDER, token=_token
-        )
+        # Load processor & apply Tokenicer auto-patching if available
+        try:
+            from tokenicer import Tokenicer
+            print("[MODEL] Applying Tokenicer for robust tokenizer loading & pad_token normalization...")
+            processor = AutoProcessor.from_pretrained(
+                UNIFIED_HF_REPO, subfolder=CANGKOK_SUBFOLDER, token=_token
+            )
+            if hasattr(processor, "tokenizer"):
+                processor.tokenizer = Tokenicer.load(processor.tokenizer)
+        except Exception as _e_tok:
+            print(f"ℹ️ [MODEL] Tokenicer info: {_e_tok}. Using standard AutoProcessor.")
+            processor = AutoProcessor.from_pretrained(
+                UNIFIED_HF_REPO, subfolder=CANGKOK_SUBFOLDER, token=_token
+            )
 
         from unsloth.chat_templates import get_chat_template
         tokenizer = get_chat_template(tokenizer, chat_template="gemma-3")
