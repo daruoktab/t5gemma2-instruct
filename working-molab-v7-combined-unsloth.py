@@ -1350,8 +1350,9 @@ def _(
                 _gb_sd = _g_base.state_dict()
                 _gi_sd = _g_it.state_dict()
 
-                _t5_layers = _t5.config.decoder.num_hidden_layers
-                _g_layers = _g_it.config.num_hidden_layers
+                _t5_layers = getattr(_t5.config.decoder, "num_hidden_layers", 34)
+                _g_cfg = getattr(_g_it.config, "text_config", _g_it.config)
+                _g_layers = getattr(_g_cfg, "num_hidden_layers", 34)
                 _L = min(_t5_layers, _g_layers)
                 print(f"\n  Decoder layers: T5Gemma={_t5_layers}, Gemma3={_g_layers} → steer {_L} layers pertama")
 
