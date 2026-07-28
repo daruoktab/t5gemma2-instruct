@@ -11,7 +11,7 @@
 3. [Riset Pelatihan Multimodal: 1-Stage Joint Co-Training vs. 2-Stage Fine-Tuning](#3-riset-pelatihan-multimodal-1-stage-joint-co-training-vs-2-stage-fine-tuning)
 4. [Riset Optimizer SOTA: Muon (Moonshot AI / Kimi) vs. GrokAdEMAMix vs. Paged AdamW 8-bit](#4-riset-optimizer-sota-muon-moonshot-ai--kimi-vs-grokademamix-vs-paged-adamw-8-bit)
 5. [Teknik Regulasi, Special Tokens & Penanganan Vocabulary Raksasa (262k Vocab)](#5-teknik-regulasi-special-tokens--penanganan-vocabulary-raksasa-262k-vocab)
-6. [Blueprint Arsitektur Ideal & Panduan Refactoring Pipeline (`working-molab-v6-combined-unsloth.py`)](#6-blueprint-arsitektur-ideal--panduan-refactoring-pipeline)
+6. [Blueprint Arsitektur Ideal & Panduan Refactoring Pipeline (`working-molab-v7-combined-unsloth.py`)](#6-blueprint-arsitektur-ideal--panduan-refactoring-pipeline)
 
 ---
 
@@ -263,7 +263,7 @@ class GrokMuonAdEMA(Optimizer):
 | **Full Parameter SFT** | $1 \times 10^{-5} \sim 2 \times 10^{-5}$ | **10.0x ~ 20.0x** | $1 \times 10^{-4} \sim 4 \times 10^{-4}$ | Menjaga stabilitas ortogonal matriks 2D |
 | **ORPO / DPO Tuning** | $5 \times 10^{-6} \sim 1 \times 10^{-5}$ | **2.0x ~ 5.0x** | $2 \times 10^{-5} \sim 5 \times 10^{-5}$ | Menjaga agar pembaharuan odds-ratio tidak terlalu agresif |
 
-3. **Analisis Konfigurasi pada Pipeline `working-molab-v6-combined-unsloth.py`**:
+3. **Analisis Konfigurasi pada Pipeline [`working-molab-v7-combined-unsloth.py`](file:///d:/Codings/unsloth-porto/t5-gemma-2/instruct/working-molab-v7-combined-unsloth.py)**:
    * Pada skrip produksi kita:
      - `SFT_LEARNING_RATE = 5e-6`
      - Multiplier decoder: `SFT_LR_MULT_DECODER = 0.2` (Base AdamW LR decoder = $1 \times 10^{-6}$)
