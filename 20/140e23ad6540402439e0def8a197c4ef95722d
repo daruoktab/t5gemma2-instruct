@@ -1,0 +1,22 @@
+notebooks/working-molab-v7-combined-unsloth.py
+  s_0b4d9027f5345c::t_5bf4b4c24b312b 4302-4315
+  s_0b4d9027f5345c::t_2f00a0b99d24d4 4334-4336
+  s_0b4d9027f5345c::t_b5d0e108b22bf2 4151
+  s_0b4d9027f5345c::t_5c51373e0aef10 4156-4160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "20140e23ad6540402439e0def8a197c4ef95722d",
+  "prompts": {},
+  "sessions": {
+    "s_0b4d9027f5345c": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_05b21d3b5ffexL9D6hPProWhw0",
+        "model": "unknown"
+      },
+      "human_author": "daruoktab <daruokta@gmail.com>"
+    }
+  }
+}
