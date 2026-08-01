@@ -1171,7 +1171,7 @@ def _(format_encoder_from_raw, load_dataset, random):
 
 
 @app.cell
-def _(os):
+def _(BASE_T5_MODEL, os):
     # =====================================================================
     # UPLOAD INTEGRITY & PROVENANCE HELPERS
     # Prinsip: artefak di HF harus CLEAN — upload baru dianggap selesai SETELAH
@@ -1188,6 +1188,55 @@ def _(os):
     from datetime import timezone as _tz
 
     UPLOAD_MARKER = "upload_complete.json"
+
+    import re as _re_mod
+
+    _REPO_ID_RE = _re_mod.compile(r"^[A-Za-z0-9][\w.\-]*/[A-Za-z0-9][\w.\-]*$")
+
+    def sanitize_hf_generated_metadata(folder_path: str, base_model: str) -> int:
+        """README.md & adapter_config.json hasil Trainer/Peft save sering merekam
+        PATH LOKAL (mis. /tmp/... atau results/...) sebagai base_model — validasi
+        metadata HF menolak nilai non repo-id sehingga upload_folder GAGAL TOTAL.
+        Rewrite nilai base_model yang invalid ke repo id yang sah."""
+        _fixes = 0
+
+        def _sub_if_invalid(match, replacement_fmt):
+            _val = match.group(1)
+            if _REPO_ID_RE.match(_val):
+                return match.group(0)
+            return replacement_fmt.format(base_model=base_model)
+
+        _p_adp = os.path.join(folder_path, "adapter_config.json")
+        if os.path.exists(_p_adp):
+            with open(_p_adp, "r", encoding="utf-8") as _f:
+                _c = _f.read()
+            _n = _re_mod.sub(
+                r'"base_model_name_or_path":\s*"([^"]*)"',
+                lambda m: _sub_if_invalid(m, '"base_model_name_or_path": "{base_model}"'),
+                _c,
+            )
+            if _n != _c:
+                with open(_p_adp, "w", encoding="utf-8") as _f:
+                    _f.write(_n)
+                _fixes += 1
+
+        _p_rd = os.path.join(folder_path, "README.md")
+        if os.path.exists(_p_rd):
+            with open(_p_rd, "r", encoding="utf-8") as _f:
+                _c = _f.read()
+            _n = _re_mod.sub(
+                r"base_model:\s*([^\r\n]+)",
+                lambda m: _sub_if_invalid(m, "base_model: {base_model}"),
+                _c,
+            )
+            if _n != _c:
+                with open(_p_rd, "w", encoding="utf-8") as _f:
+                    _f.write(_n)
+                _fixes += 1
+
+        if _fixes:
+            print(f"  🧽 Metadata disanitasi ({_fixes} file): base_model -> {base_model}")
+        return _fixes
 
     def _marker_sha(marker: dict) -> str:
         return _hashlib.sha256(_json.dumps(marker, sort_keys=True).encode()).hexdigest()
@@ -1246,10 +1295,13 @@ def _(os):
         print(f"  🧹 Remote dibersihkan: {prefix} ({len(victims)} file)")
         return len(victims)
 
-    def upload_folder_atomic(api, repo_id: str, folder_path: str, path_in_repo: str, commit_message=None) -> dict:
+    def upload_folder_atomic(api, repo_id: str, folder_path: str, path_in_repo: str, commit_message=None, sanitize_base_model: str = BASE_T5_MODEL) -> dict:
         """Upload folder + verifikasi SEMUA file sampai + marker sebagai commit TERAKHIR.
-        Gagal/parsial di tengah → prefix remote dibersihkan, lalu raise."""
+        Metadata README/adapter_config disanitasi dulu dari path lokal (penyebab
+        kegagalan validasi HF). Gagal/parsial di tengah → prefix remote dibersihkan,
+        lalu raise."""
         path_in_repo = path_in_repo.rstrip("/")
+        sanitize_hf_generated_metadata(folder_path, sanitize_base_model)
         local_files = []
         total_bytes = 0
         for _root, _dirs, _fnames in os.walk(folder_path):
@@ -3141,25 +3193,7 @@ def _(
             local_checkpoint_path = os.path.join(args.output_dir, checkpoint_name)
 
             try:
-                # Sanitasi path lokal (/tmp/...) pada README.md dan adapter_config.json agar tidak ditolak HF Hub Validation
-                readme_path = os.path.join(local_checkpoint_path, "README.md")
-                if os.path.exists(readme_path):
-                    with open(readme_path, "r", encoding="utf-8") as _rf:
-                        _readme_content = _rf.read()
-                    import re as _re_hub
-                    _clean_readme = _re_hub.sub(r'base_model:\s*/tmp/\S+', f'base_model: {self.base_model}', _readme_content)
-                    with open(readme_path, "w", encoding="utf-8") as _wf:
-                        _wf.write(_clean_readme)
-
-                adapter_cfg_path = os.path.join(local_checkpoint_path, "adapter_config.json")
-                if os.path.exists(adapter_cfg_path):
-                    with open(adapter_cfg_path, "r", encoding="utf-8") as _af:
-                        _adapter_content = _af.read()
-                    import re as _re_hub
-                    _clean_adapter = _re_hub.sub(r'"base_model_name_or_path":\s*"/tmp/\S+"', f'"base_model_name_or_path": "{self.base_model}"', _adapter_content)
-                    with open(adapter_cfg_path, "w", encoding="utf-8") as _wf:
-                        _wf.write(_clean_adapter)
-
+                # Sanitasi metadata base_model (path lokal) ditangani terpusat oleh upload_folder_atomic
                 _api.create_repo(repo_id=self.repo_id, repo_type="model", private=False, exist_ok=True)
                 print(f"\n📤 Uploading {checkpoint_name} to HF {self.hf_prefix}/{self.stage}/ (verified-atomic)...")
                 upload_folder_atomic(
@@ -3167,6 +3201,7 @@ def _(
                     self.repo_id,
                     local_checkpoint_path,
                     f"{self.hf_prefix}/{self.stage}/{checkpoint_name}",
+                    sanitize_base_model=self.base_model,
                 )
 
                 if self.output_dir:
