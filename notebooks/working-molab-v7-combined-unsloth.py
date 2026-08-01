@@ -342,22 +342,41 @@ def _(hf_token_widget, mo, os):
     if not _val:
         _val = os.environ.get("HF_TOKEN", "").strip()
 
-    if _val:
-        try:
-            os.environ["HF_TOKEN"] = _val
-            login(token=_val)
-            auth_status = mo.md(
-                "✅ **Hugging Face Token terautentikasi!** Berhasil login ke HuggingFace Hub. "
-                "Siap mengakses gated models (`google/gemma-3-4b-pt`, `google/gemma-3-4b-it`, `google/t5gemma-2-4b-4b`)."
-            )
-        except Exception as _e_login:
-            auth_status = mo.md(f"❌ **Gagal login ke Hugging Face:** {_e_login}")
-    else:
-        auth_status = mo.md(
-            "⚠️ **`HF_TOKEN` belum dimasukkan.** Masukkan HF Access Token Anda pada input widget di atas "
-            "untuk mengautentikasi dan mengunduh gated models (`google/gemma-3-4b-pt`, `google/gemma-3-4b-it`, `google/t5gemma-2-4b-4b`).\n\n"
-            "👉 Ambil token di: [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)"
+    # FAIL-HARD: token invalid/kosong harus ketahuan DI SINI (bukan saat upload checkpoint).
+    if not _val:
+        raise RuntimeError(
+            "HF_TOKEN kosong — pipeline memerlukan token (WRITE) untuk upload checkpoint ke HF "
+            "dan mengunduh gated models. Isi widget di atas lalu jalankan ulang."
         )
+
+    os.environ["HF_TOKEN"] = _val
+    try:
+        login(token=_val)
+    except Exception as _e_login:
+        raise RuntimeError(f"HF_TOKEN tidak valid (login gagal): {_e_login}") from _e_login
+
+    # Verifikasi nyata ke server: whoami() melempar error kalau token invalid/expired.
+    from huggingface_hub import HfApi as _WhoAmIApi
+    try:
+        _who = _WhoAmIApi(token=_val).whoami()
+    except Exception as _e_whoami:
+        raise RuntimeError(f"HF_TOKEN tidak bisa diautentikasi server (whoami gagal): {_e_whoami}") from _e_whoami
+
+    _role = "?"
+    if isinstance(_who, dict):
+        _role = (_who.get("auth", {}).get("accessToken", {}) or {}).get("role") or _who.get("type") or "?"
+    _name = _who.get("name", "?") if isinstance(_who, dict) else str(_who)
+    if _role == "read":
+        raise RuntimeError(
+            f"HF_TOKEN valid tapi READ-ONLY (akun: {_name}) — upload checkpoint butuh token WRITE. "
+            "Buat token bertipe WRITE di https://huggingface.co/settings/tokens."
+        )
+
+    print(f"✅ HF auth OK: {_name} (role={_role})")
+    auth_status = mo.md(
+        f"✅ **HF Token valid** (`{_name}`, role=`{_role}`). "
+        "Siap akses gated models (`google/gemma-3-4b-pt`, `google/gemma-3-4b-it`, `google/t5gemma-2-4b-4b`) + upload checkpoints."
+    )
 
     auth_status
     return (auth_status,)
@@ -524,6 +543,19 @@ def _():
         exact_match_metric = None
         bertscore_metric = None
         meteor_metric = None
+
+    # Probe satu kali backbone BERTScore (google/embeddinggemma-300m = GATED repo):
+    # tanpa akses/token valid → BERTScore dinonaktifkan dengan 1 pesan jelas,
+    # alih-alih melempar stack-trace 401 di SETIAP titik eval.
+    if bertscore_metric is not None:
+        try:
+            cast(Any, bertscore_metric).compute(
+                predictions=["tes"], references=["tes"],
+                model_type="google/embeddinggemma-300m", num_layers=12, lang="id",
+            )
+        except Exception as _e_bs:
+            print(f"ℹ️ BERTScore dinonaktifkan (probe gagal): {_e_bs}")
+            bertscore_metric = None
 
     # ---- LOGIT MASKING (decoder lm_head) ----
     def apply_logit_mask(model, suppress_ids):
