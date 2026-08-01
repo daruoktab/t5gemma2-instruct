@@ -1193,28 +1193,63 @@ def _(BASE_T5_MODEL, os):
 
     _REPO_ID_RE = _re_mod.compile(r"^[A-Za-z0-9][\w.\-]*/[A-Za-z0-9][\w.\-]*$")
 
+    def _normalize_readme_frontmatter(content: str, base_model: str) -> str:
+        """Parse front-matter YAML README, lalu emit ulang HANYA field whitelist
+        dengan tipe yang sah menurut validator HF (/api/validate-yaml):
+        base_model -> repo id valid, tags/language/datasets -> list[str],
+        library_name/license/pipeline_tag -> str. Field lain dibuang.
+        (JANGAN regex: tag `base_model:adapter:...` pernah rusak jadi dict YAML.)"""
+        import yaml as _yaml
+
+        _body = content
+        _meta = {}
+        if content.startswith("---"):
+            _parts = content.split("---", 2)
+            if len(_parts) >= 3:
+                _fm_raw, _body = _parts[1], _parts[2]
+                try:
+                    _loaded = _yaml.safe_load(_fm_raw)
+                    if isinstance(_loaded, dict):
+                        _meta = _loaded
+                except Exception:
+                    _meta = {}
+
+        _clean = {}
+        _bm = _meta.get("base_model")
+        _clean["base_model"] = _bm if (isinstance(_bm, str) and _REPO_ID_RE.match(_bm)) else base_model
+        for _k in ("library_name", "license", "pipeline_tag"):
+            _v = _meta.get(_k)
+            if isinstance(_v, str) and _v.strip():
+                _clean[_k] = _v
+        for _k in ("tags", "language", "datasets"):
+            _v = _meta.get(_k)
+            if isinstance(_v, list):
+                _items = [x for x in _v if isinstance(x, str) and x.strip()]
+                if _items:
+                    _clean[_k] = _items
+            elif isinstance(_v, str) and _v.strip():
+                _clean[_k] = [_v]
+
+        return f"---\n{_yaml.safe_dump(_clean, sort_keys=False, allow_unicode=True)}---{_body}"
+
     def sanitize_hf_generated_metadata(folder_path: str, base_model: str) -> int:
         """README.md & adapter_config.json hasil Trainer/Peft save sering merekam
         PATH LOKAL (mis. /tmp/... atau results/...) sebagai base_model — validasi
         metadata HF menolak nilai non repo-id sehingga upload_folder GAGAL TOTAL.
-        Rewrite nilai base_model yang invalid ke repo id yang sah."""
+        adapter_config: replace nilai JSON invalid. README: normalisasi YAML."""
         _fixes = 0
-
-        def _sub_if_invalid(match, replacement_fmt):
-            _val = match.group(1)
-            if _REPO_ID_RE.match(_val):
-                return match.group(0)
-            return replacement_fmt.format(base_model=base_model)
 
         _p_adp = os.path.join(folder_path, "adapter_config.json")
         if os.path.exists(_p_adp):
             with open(_p_adp, "r", encoding="utf-8") as _f:
                 _c = _f.read()
-            _n = _re_mod.sub(
-                r'"base_model_name_or_path":\s*"([^"]*)"',
-                lambda m: _sub_if_invalid(m, '"base_model_name_or_path": "{base_model}"'),
-                _c,
-            )
+
+            def _rep_adapter(m):
+                if _REPO_ID_RE.match(m.group(1)):
+                    return m.group(0)
+                return f'"base_model_name_or_path": "{base_model}"'
+
+            _n = _re_mod.sub(r'"base_model_name_or_path":\s*"([^"]*)"', _rep_adapter, _c)
             if _n != _c:
                 with open(_p_adp, "w", encoding="utf-8") as _f:
                     _f.write(_n)
@@ -1224,11 +1259,7 @@ def _(BASE_T5_MODEL, os):
         if os.path.exists(_p_rd):
             with open(_p_rd, "r", encoding="utf-8") as _f:
                 _c = _f.read()
-            _n = _re_mod.sub(
-                r"base_model:\s*([^\r\n]+)",
-                lambda m: _sub_if_invalid(m, "base_model: {base_model}"),
-                _c,
-            )
+            _n = _normalize_readme_frontmatter(_c, base_model)
             if _n != _c:
                 with open(_p_rd, "w", encoding="utf-8") as _f:
                     _f.write(_n)
@@ -3229,7 +3260,12 @@ def _(
                 except Exception as _e_prune:
                     print(f"⚠️ Prune remote checkpoint gagal (non-fatal): {_e_prune}")
             except Exception as e:
-                print(f"⚠️ Upload gagal untuk {checkpoint_name}: {e}")
+                # FAIL-HARD (permintaan eksplisit): upload checkpoint GAGAL = training STOP.
+                # Jangan lanjutkan training tanpa resume protection di HF.
+                print(f"❌ Upload GAGAL untuk {checkpoint_name}: {e}")
+                raise RuntimeError(
+                    f"[HUB-UPLOAD] {checkpoint_name} gagal di-upload ke HF — training dihentikan (fail-hard)."
+                ) from e
             return control
 
     return (
@@ -3515,7 +3551,11 @@ def _(
                 else:
                     print("⚠️ [JOINT-SFT] Tidak ada checkpoint valid — mulai dari awal.")
             except Exception as e:
-                print(f"⚠️ [JOINT-SFT] Gagal download checkpoint: {e}. Mulai dari awal.")
+                print(f"❌ [JOINT-SFT] Gagal download checkpoint: {e}.")
+                raise RuntimeError(
+                    "❌ [JOINT-SFT] Resume ditandai tersedia di HF tapi gagal di-download — "
+                    "pipeline dihentikan (fail-hard; dagi dari awal tanpa resume berbahaya)."
+                ) from e
 
         # ---- Train ----
         print("\n🚀 [JOINT-SFT] Starting JOINT training (vision + teks)...")
@@ -3545,7 +3585,8 @@ def _(
             )
             print("✅ [JOINT-SFT] Final adapter ter-upload ke joint/sft/final_adapter!")
         except Exception as e:
-            print(f"⚠️ [JOINT-SFT] Upload final adapter gagal: {e}")
+            print(f"❌ [JOINT-SFT] Upload final adapter GAGAL: {e}")
+            raise RuntimeError("❌ [JOINT-SFT] Upload final adapter gagal — pipeline dihentikan (fail-hard).") from e
     return
 
 
@@ -4012,7 +4053,11 @@ def _(
                 else:
                     print("⚠️ [JOINT-ORPO] Tidak ada checkpoint valid — mulai dari awal.")
             except Exception as e:
-                print(f"⚠️ [JOINT-ORPO] Gagal download checkpoint: {e}. Mulai dari awal.")
+                print(f"❌ [JOINT-ORPO] Gagal download checkpoint: {e}.")
+                raise RuntimeError(
+                    "❌ [JOINT-ORPO] Resume ditandai tersedia di HF tapi gagal di-download — "
+                    "pipeline dihentikan (fail-hard; dagi dari awal tanpa resume berbahaya)."
+                ) from e
 
         # ---- Train ----
         print("\n🚀 [JOINT-ORPO] Starting JOINT ORPO training...")
@@ -4041,10 +4086,9 @@ def _(
                 f"{JOINT_PREFIX}/orpo/final_adapter",
             )
             print("✅ [JOINT-ORPO] Final adapter ter-upload ke joint/orpo/final_adapter!")
-            _orpo_upload_ok = True
         except Exception as e:
-            print(f"⚠️ [JOINT-ORPO] Upload final adapter gagal: {e}")
-            _orpo_upload_ok = False
+            print(f"❌ [JOINT-ORPO] Upload final adapter GAGAL: {e}")
+            raise RuntimeError("❌ [JOINT-ORPO] Upload final adapter gagal — pipeline dihentikan (fail-hard).") from e
     return
 
 
@@ -4254,6 +4298,7 @@ def _(FINAL_PREFIX, UNIFIED_HF_REPO, final_upload_dir, os, upload_folder_atomic)
             print("✅ [UPLOAD] final/merged_bf16 & final/quantized_4bit ter-upload!")
         except Exception as e:
             print(f"❌ [UPLOAD] Terjadi kesalahan saat mengunggah: {e}")
+            raise RuntimeError(f"❌ [UPLOAD] Gagal mengunggah hasil merge: {e} — pipeline dihentikan (fail-hard).") from e
     return
 
 
