@@ -4148,10 +4148,16 @@ def _(
     os,
     processor,
     tokenizer,
+    torch,
 ):
     from huggingface_hub import HfApi as _MergeApi
 
     _token = os.environ.get("HF_TOKEN")
+    if not _token:
+        raise RuntimeError(
+            "❌ [MERGE] HF_TOKEN kosong — isi widget login & jalankan cell auth dulu. "
+            "Merge menulis ke HF; 401 akan memukul di akhir (fail-fast di sini)."
+        )
     _api = _MergeApi(token=_token)
     _files = _api.list_repo_files(UNIFIED_HF_REPO)
 
@@ -4293,6 +4299,20 @@ def _(
         merged_bf16_path = os.path.join(final_upload_dir, "merged_bf16")
         quantized_4bit_path = os.path.join(final_upload_dir, "quantized_4bit")
 
+        # Normalisasi dtype: tensor fp32 sisa (modules_to_save/lm_head/buffer) wajib
+        # di-cast ke bf16 — jalur merge Unsloth memukul "expected BFloat16, found Float".
+        _n_cast = 0
+        for _nm_p, _p_m in _model_to_merge.named_parameters():
+            if _p_m.dtype == torch.float32:
+                _p_m.data = _p_m.data.to(torch.bfloat16)
+                _n_cast += 1
+        for _nm_b, _b_m in _model_to_merge.named_buffers():
+            if _b_m.dtype == torch.float32:
+                _b_m.data = _b_m.data.to(torch.bfloat16)
+                _n_cast += 1
+        if _n_cast:
+            print(f"[MERGE] Cast {_n_cast} tensor fp32 → bf16")
+
         print("[MERGE] Merging LoRA adapter → BF16 (merged_16bit)...")
         _model_to_merge.save_pretrained_merged(merged_bf16_path, _merge_tokenizer, save_method="merged_16bit")
         _merge_tokenizer.save_pretrained(merged_bf16_path)
@@ -4310,6 +4330,9 @@ def _(
 @app.cell
 def _(FINAL_PREFIX, UNIFIED_HF_REPO, final_upload_dir, os, upload_folder_atomic):
     from huggingface_hub import HfApi as _UpFinalApi
+
+    if not os.environ.get("HF_TOKEN"):
+        raise RuntimeError("❌ [UPLOAD] HF_TOKEN kosong — isi widget login & jalankan cell auth dulu.")
 
     _has_merged = os.path.exists(os.path.join(final_upload_dir, "merged_bf16", "config.json"))
     if not _has_merged:
