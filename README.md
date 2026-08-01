@@ -166,17 +166,23 @@ t5-gemma-2-instruct/
 │   ├── server.py             # Backend Flask
 │   └── templates/            # Frontend HTML/CSS
 ├── data/                     # Dataset (Chat & IndoQA)
-├── docs/                     # Dokumentasi Master, Riset & Infografis
+├── docs/                     # Dokumentasi Master, Spesifikasi & Sesi Riset
 │   ├── ARCHITECTURE_MASTER.md
-│   ├── project-infographic.png
-│   └── t5_gemma2_training_flow.png
-├── scripts/                  # Kumpulan Skrip Fungsional
+│   ├── T5GEMMA_2_INSTRUCT_MASTER_SPECIFICATION.md
+│   ├── Debugging Vision Model Performance.md
+│   ├── diagnostic_report.md
+│   ├── sessions/             # Catatan & log sesi riset
+│   └── paper/                # PDF referensi paper & publikasi
+├── notebooks/                # Notebooks & Skrip Pelatihan Cloud (Marimo)
+│   ├── working-molab-v7-combined-unsloth.py   # Versi Aktif Joint Multimodal
+│   └── legacy/               # Notebooks versi terdahulu (v3-v6)
+├── scripts/                  # Kumpulan Skrip Fungsional (Python)
 │   ├── analysis/             # Analisis token & arsitektur
 │   ├── dataset/              # Pembuatan & pembersihan dataset
-│   ├── eval/                 # Evaluasi model & metrics
+│   ├── eval/                 # Evaluasi model & metrik
 │   ├── tests/                # Unit testing inference & loss
 │   └── training/             # Skrip pelatihan SFT dan DPO
-├── inference.py              # Skrip inferensi CLI sederhana
+├── inference.py              # Skrip inferensi CLI utama
 ├── .gitignore                # Konfigurasi pengabaian file Git
 └── README.md                 # Dokumentasi utama (File ini)
 ```

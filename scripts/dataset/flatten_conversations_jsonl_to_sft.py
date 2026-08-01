@@ -123,9 +123,9 @@ def main() -> None:
             except json.JSONDecodeError as e:
                 print(f"[SKIP] JSON error: {e}", file=sys.stderr)
                 continue
-            convs = obj.get("conversations")
+            convs = obj.get("conversations") or obj.get("messages")
             if not isinstance(convs, list):
-                print("[SKIP] baris tanpa conversations[]", file=sys.stderr)
+                print("[SKIP] baris tanpa conversations[] / messages[]", file=sys.stderr)
                 continue
             n_in += 1
             chat_idx = obj.get("id")
