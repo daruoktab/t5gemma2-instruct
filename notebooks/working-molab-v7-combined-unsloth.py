@@ -360,7 +360,7 @@ def _(hf_token_widget, mo, os):
         )
 
     auth_status
-    return
+    return (auth_status,)
 
 
 @app.cell
@@ -549,10 +549,18 @@ def _():
         elif hasattr(model, "base_model") and hasattr(model.base_model, "model") and hasattr(model.base_model.model, "lm_head"):
             t = model.base_model.model.lm_head
         if t is not None:
+            if getattr(t, "_logit_mask_hook_registered", False):
+                print("  ℹ️ Logit mask sudah terpasang — skip (hindari double hook).")
+                return
             t.register_forward_hook(hook)
+            t._logit_mask_hook_registered = True
             print(f"  ✅ Logit mask (lm_head) untuk {len(sl)} tokens.")
         else:
+            if getattr(model, "_logit_mask_hook_registered", False):
+                print("  ℹ️ Logit mask (fallback) sudah terpasang — skip.")
+                return
             model.register_forward_hook(hook)
+            model._logit_mask_hook_registered = True
             print(f"  ✅ Logit mask (fallback) untuk {len(sl)} tokens.")
 
     return (
@@ -1163,6 +1171,189 @@ def _(format_encoder_from_raw, load_dataset, random):
 
 
 @app.cell
+def _(os):
+    # =====================================================================
+    # UPLOAD INTEGRITY & PROVENANCE HELPERS
+    # Prinsip: artefak di HF harus CLEAN — upload baru dianggap selesai SETELAH
+    # seluruh file lokal terverifikasi ada di remote, lalu ditandai marker
+    # `upload_complete.json` (commit TERAKHIR). Upload yang gagal di tengah
+    # (jaringan putus / server crash) → prefix remote dibersihkan sehingga
+    # tidak pernah ada artefak parsial. Cache lokal hanya sah jika
+    # provenance-nya cocok dengan marker remote (HF = source of truth).
+    # =====================================================================
+    import hashlib as _hashlib
+    import io as _io
+    import json as _json
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    UPLOAD_MARKER = "upload_complete.json"
+
+    def _marker_sha(marker: dict) -> str:
+        return _hashlib.sha256(_json.dumps(marker, sort_keys=True).encode()).hexdigest()
+
+    def remote_marker(repo_id: str, prefix: str, token=None):
+        """Ambil marker upload_complete.json dari remote (None jika belum ada)."""
+        from huggingface_hub import hf_hub_download
+        try:
+            _p = hf_hub_download(
+                repo_id=repo_id,
+                filename=f"{prefix.rstrip('/')}/{UPLOAD_MARKER}",
+                repo_type="model",
+                token=token,
+            )
+            with open(_p, "r", encoding="utf-8") as _f:
+                return _json.load(_f)
+        except Exception:
+            return None
+
+    def write_local_provenance(local_dir: str, marker) -> None:
+        """Catat dari artefak remote mana cache lokal ini berasal."""
+        os.makedirs(local_dir, exist_ok=True)
+        prov = {"marker_sha": _marker_sha(marker)} if marker else {"marker_sha": "legacy"}
+        with open(os.path.join(local_dir, "_hf_provenance.json"), "w", encoding="utf-8") as _f:
+            _json.dump(prov, _f, indent=2)
+
+    def local_provenance_valid(local_dir: str, marker) -> bool:
+        """Cache lokal sah HANYA jika provenance cocok dengan marker remote saat ini.
+        Artefak baru (ber-marker) selalu menang atas cache legacy."""
+        _pf = os.path.join(local_dir, "_hf_provenance.json")
+        if not os.path.exists(_pf):
+            return False
+        try:
+            with open(_pf, "r", encoding="utf-8") as _f:
+                prov = _json.load(_f)
+        except Exception:
+            return False
+        if marker is None:
+            return prov.get("marker_sha") == "legacy"
+        return prov.get("marker_sha") == _marker_sha(marker)
+
+    def delete_remote_prefix(api, repo_id: str, prefix: str) -> int:
+        """Hapus SEMUA file di bawah prefix remote (cleanup upload parsial)."""
+        prefix = prefix.rstrip("/") + "/"
+        victims = [f for f in api.list_repo_files(repo_id) if f.startswith(prefix)]
+        if not victims:
+            return 0
+        try:
+            api.delete_files(repo_id=repo_id, file_paths=victims, repo_type="model")
+        except Exception:
+            for _v in victims:
+                try:
+                    api.delete_file(path_in_repo=_v, repo_id=repo_id, repo_type="model")
+                except Exception as _e_df:
+                    print(f"  ⚠️ Gagal menghapus {_v}: {_e_df}")
+        print(f"  🧹 Remote dibersihkan: {prefix} ({len(victims)} file)")
+        return len(victims)
+
+    def upload_folder_atomic(api, repo_id: str, folder_path: str, path_in_repo: str, commit_message=None) -> dict:
+        """Upload folder + verifikasi SEMUA file sampai + marker sebagai commit TERAKHIR.
+        Gagal/parsial di tengah → prefix remote dibersihkan, lalu raise."""
+        path_in_repo = path_in_repo.rstrip("/")
+        local_files = []
+        total_bytes = 0
+        for _root, _dirs, _fnames in os.walk(folder_path):
+            for _fn in _fnames:
+                _full = os.path.join(_root, _fn)
+                _rel = os.path.relpath(_full, folder_path).replace("\\", "/")
+                local_files.append(_rel)
+                total_bytes += os.path.getsize(_full)
+
+        try:
+            api.upload_folder(
+                folder_path=folder_path,
+                path_in_repo=path_in_repo,
+                repo_id=repo_id,
+                repo_type="model",
+                commit_message=commit_message,
+            )
+            _remote = set(api.list_repo_files(repo_id))
+            _missing = [f for f in local_files if f"{path_in_repo}/{f}" not in _remote]
+            if _missing:
+                raise RuntimeError(f"{len(_missing)}/{len(local_files)} file TIDAK ter-upload: {_missing[:5]}")
+        except Exception as _e_up:
+            print(f"  ⚠️ Upload gagal/parsial ({_e_up}) — membersihkan '{path_in_repo}' di remote...")
+            try:
+                delete_remote_prefix(api, repo_id, path_in_repo)
+            except Exception as _e_clean:
+                print(f"  ⚠️ Cleanup remote gagal: {_e_clean}")
+            raise
+
+        _marker = {
+            "version": 1,
+            "path_in_repo": path_in_repo,
+            "n_files": len(local_files),
+            "bytes": total_bytes,
+            "timestamp": _dt.now(_tz.utc).isoformat(),
+        }
+        api.upload_file(
+            path_or_fileobj=_io.BytesIO(_json.dumps(_marker, indent=2).encode()),
+            path_in_repo=f"{path_in_repo}/{UPLOAD_MARKER}",
+            repo_id=repo_id,
+            repo_type="model",
+            commit_message=f"integrity marker: {path_in_repo}",
+        )
+        print(f"  ✅ Upload terverifikasi lengkap + marker: {path_in_repo} ({len(local_files)} files, {total_bytes/1e6:.1f} MB)")
+        return _marker
+
+    def _has_any(files_set, prefix: str, predicate) -> bool:
+        return any(f.startswith(prefix) and predicate(f) for f in files_set)
+
+    def prefix_is_complete(files, prefix: str, kind: str = "model") -> bool:
+        """Artefak valid = marker ADA, atau legacy-complete (critical files lengkap —
+        untuk artefak hasil upload era sebelum marker)."""
+        prefix = prefix.rstrip("/") + "/"
+        files_set = set(files)
+        if f"{prefix}{UPLOAD_MARKER}" in files_set:
+            return True
+        if kind == "model":
+            return _has_any(files_set, prefix, lambda f: f.endswith("config.json")) and _has_any(files_set, prefix, lambda f: f.endswith(".safetensors"))
+        if kind == "adapter":
+            return _has_any(files_set, prefix, lambda f: f.endswith("adapter_config.json")) and _has_any(files_set, prefix, lambda f: "adapter_model." in f)
+        if kind == "checkpoint":
+            return (
+                _has_any(files_set, prefix, lambda f: f.endswith("adapter_config.json"))
+                and _has_any(files_set, prefix, lambda f: "adapter_model." in f)
+                and _has_any(files_set, prefix, lambda f: f.endswith("trainer_state.json"))
+                and _has_any(files_set, prefix, lambda f: f.rsplit("/", 1)[-1].startswith("optimizer"))
+            )
+        return False
+
+    def _checkpoint_dirs(files, stage_prefix: str):
+        stage_prefix = stage_prefix.rstrip("/")
+        return sorted({
+            f.split("/")[2]
+            for f in files
+            if f.startswith(f"{stage_prefix}/checkpoint-") and len(f.split("/")) >= 4
+        })
+
+    def complete_checkpoint_dirs(files, stage_prefix: str):
+        """Checkpoint-* yang LENGKAP (punya marker / legacy-complete)."""
+        stage_prefix = stage_prefix.rstrip("/")
+        return [d for d in _checkpoint_dirs(files, stage_prefix) if prefix_is_complete(files, f"{stage_prefix}/{d}", "checkpoint")]
+
+    def incomplete_checkpoint_dirs(files, stage_prefix: str):
+        stage_prefix = stage_prefix.rstrip("/")
+        return [d for d in _checkpoint_dirs(files, stage_prefix) if not prefix_is_complete(files, f"{stage_prefix}/{d}", "checkpoint")]
+
+    def prefix_has_files(files, prefix: str) -> bool:
+        prefix = prefix.rstrip("/") + "/"
+        return any(f.startswith(prefix) for f in files)
+
+    return (
+        complete_checkpoint_dirs,
+        delete_remote_prefix,
+        incomplete_checkpoint_dirs,
+        local_provenance_valid,
+        prefix_has_files,
+        prefix_is_complete,
+        remote_marker,
+        upload_folder_atomic,
+        write_local_provenance,
+    )
+
+
+@app.cell
 def _(
     CANGKOK_FORCE,
     CANGKOK_SUBFOLDER,
@@ -1172,8 +1363,14 @@ def _(
     STEERED_SUBFOLDER,
     STEERING_FORCE,
     UNIFIED_HF_REPO,
+    auth_status,
+    complete_checkpoint_dirs,
+    delete_remote_prefix,
+    incomplete_checkpoint_dirs,
     mo,
     os,
+    prefix_has_files,
+    prefix_is_complete,
 ):
     from huggingface_hub import HfApi as _StageApi
 
@@ -1182,23 +1379,41 @@ def _(
     _api.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
     _files = _api.list_repo_files(UNIFIED_HF_REPO)
 
-    def _has(path_prefix: str, suffix: str = "config.json") -> bool:
-        return any(f.startswith(path_prefix) and f.endswith(suffix) for f in _files)
+    # ---- CLEANUP: hapus artefak PARSIAL (upload terputus / server crash) ----
+    # Aturan: artefak valid = punya marker upload_complete.json, atau legacy-complete.
+    # Selain itu (folder ada isinya tapi critical files hilang) → kotor → hapus.
+    _cleanup_targets = []
+    for _p, _kind in (
+        (STEERED_SUBFOLDER, "model"),
+        (CANGKOK_SUBFOLDER, "model"),
+        (f"{JOINT_PREFIX}/sft/final_adapter", "adapter"),
+        (f"{JOINT_PREFIX}/orpo/final_adapter", "adapter"),
+        (f"{FINAL_PREFIX}/merged_bf16", "model"),
+        (f"{FINAL_PREFIX}/quantized_4bit", "model"),
+    ):
+        if prefix_has_files(_files, _p) and not prefix_is_complete(_files, _p, _kind):
+            _cleanup_targets.append((_p, f"artefak parsial ({_kind})"))
+    for _stage_p in (f"{JOINT_PREFIX}/sft", f"{JOINT_PREFIX}/orpo"):
+        for _d in incomplete_checkpoint_dirs(_files, _stage_p):
+            _cleanup_targets.append((f"{_stage_p}/{_d}", "checkpoint parsial"))
+    if _cleanup_targets:
+        print(f"🧹 Membersihkan {len(_cleanup_targets)} artefak upload parsial di HF...")
+        for _p, _why in _cleanup_targets:
+            try:
+                print(f"   • {_p} — {_why}")
+                delete_remote_prefix(_api, UNIFIED_HF_REPO, _p)
+            except Exception as _e_cl:
+                print(f"  ⚠️ Gagal membersihkan {_p}: {_e_cl}")
+        _files = _api.list_repo_files(UNIFIED_HF_REPO)  # refresh pasca-cleanup
 
-    def _has_ckpt(path_prefix: str) -> bool:
-        return any(
-            f.startswith(f"{path_prefix}/checkpoint-") and "/" in f[len(f"{path_prefix}/checkpoint-"):]
-            for f in _files
-        )
+    steered_exists = prefix_is_complete(_files, STEERED_SUBFOLDER, "model")
+    cangkok_exists = prefix_is_complete(_files, CANGKOK_SUBFOLDER, "model")
+    sft_done = prefix_is_complete(_files, f"{JOINT_PREFIX}/sft/final_adapter", "adapter")
+    orpo_done = prefix_is_complete(_files, f"{JOINT_PREFIX}/orpo/final_adapter", "adapter")
+    final_done = prefix_is_complete(_files, f"{FINAL_PREFIX}/merged_bf16", "model")
 
-    steered_exists = _has(f"{STEERED_SUBFOLDER}/")
-    cangkok_exists = _has(f"{CANGKOK_SUBFOLDER}/")
-    sft_done = _has(f"{JOINT_PREFIX}/sft/final_adapter/", "adapter_config.json")
-    orpo_done = _has(f"{JOINT_PREFIX}/orpo/final_adapter/", "adapter_config.json")
-    final_done = _has(f"{FINAL_PREFIX}/merged_bf16/")
-
-    sft_resume = _has_ckpt(f"{JOINT_PREFIX}/sft")
-    orpo_resume = _has_ckpt(f"{JOINT_PREFIX}/orpo")
+    sft_resume = len(complete_checkpoint_dirs(_files, f"{JOINT_PREFIX}/sft")) > 0
+    orpo_resume = len(complete_checkpoint_dirs(_files, f"{JOINT_PREFIX}/orpo")) > 0
 
     if final_done:
         pipeline_stage = "done"
@@ -1297,6 +1512,8 @@ def _(
     os,
     steered_exists,
     torch,
+    upload_folder_atomic,
+    write_local_provenance,
 ):
     _token = os.environ.get("HF_TOKEN")
 
@@ -1505,19 +1722,20 @@ def _(
                     _json.dump(_tc, _f, indent=2, ensure_ascii=False)
                 print("  ✅ tokenizer_config dipatch dengan task_prefix_mapping")
 
-                print(f"\n  Uploading ke {UNIFIED_HF_REPO} subfolder '{STEERED_SUBFOLDER}/'...")
+                print(f"\n  Uploading ke {UNIFIED_HF_REPO} subfolder '{STEERED_SUBFOLDER}/' (verified-atomic)...")
                 from huggingface_hub import HfApi as _SteerApi
                 _api = _SteerApi(token=_token)
-                _api.upload_folder(
-                    folder_path=_local,
-                    path_in_repo=STEERED_SUBFOLDER,
-                    repo_id=UNIFIED_HF_REPO,
-                    repo_type="model",
+                _marker = upload_folder_atomic(
+                    _api,
+                    UNIFIED_HF_REPO,
+                    _local,
+                    STEERED_SUBFOLDER,
                     commit_message=(
                         f"Phase 0.5 Task Vector Steering: ffn_mid={STEERING_ALPHA_FFN_MID}, "
                         f"norm_mid={STEERING_ALPHA_NORM_MID} (Gemma3-IT − Gemma3-Base)"
                     ),
                 )
+                write_local_provenance(_local, _marker)
 
                 del _t5, _t5_sd, _steer_tok
                 gc.collect()
@@ -1560,9 +1778,13 @@ def _(
     UNIFIED_HF_REPO,
     cangkok_exists,
     gc,
+    local_provenance_valid,
     os,
     pipeline_stage,
+    remote_marker,
     torch,
+    upload_folder_atomic,
+    write_local_provenance,
 ):
     from huggingface_hub import HfApi as _GraftApi
 
@@ -1587,11 +1809,17 @@ def _(
         from transformers import AutoProcessor as _GraftProc
 
         _steered_local = "/tmp/t5gemma2_steered"
+        # Staleness guard: cache lokal steered hanya sah jika cocok dengan marker remote.
+        _marker_steered = remote_marker(UNIFIED_HF_REPO, STEERED_SUBFOLDER, _token) if _token else None
+        if os.path.isdir(_steered_local) and not local_provenance_valid(_steered_local, _marker_steered):
+            import shutil as _sh_wipe_st
+            _sh_wipe_st.rmtree(_steered_local, ignore_errors=True)
+            print(f"  🧹 Cache lokal steered usang (marker remote beda) — dihapus: {_steered_local}")
         if ENABLE_STEERING:
             if os.path.exists(_steered_local) and os.path.exists(os.path.join(_steered_local, "config.json")):
                 _tgt_id = _steered_local
                 _tgt_kw = {}
-                print(f"\n[A] Target: {_steered_local} (lokal hasil Phase 0.5)")
+                print(f"\n[A] Target: {_steered_local} (lokal hasil Phase 0.5 — provenance valid)")
             else:
                 _tgt_id = UNIFIED_HF_REPO
                 _tgt_kw = dict(subfolder=STEERED_SUBFOLDER)
@@ -1706,16 +1934,17 @@ def _(
             with open(_tc_path, "w", encoding="utf-8") as _f:
                 _json.dump(_tc, _f, indent=2, ensure_ascii=False)
 
-            print(f"  Uploading ke {UNIFIED_HF_REPO} subfolder '{CANGKOK_SUBFOLDER}/'...")
+            print(f"  Uploading ke {UNIFIED_HF_REPO} subfolder '{CANGKOK_SUBFOLDER}/' (verified-atomic)...")
             from huggingface_hub import HfApi as _GraftApi
             _api = _GraftApi(token=_token)
-            _api.upload_folder(
-                folder_path=_local_save,
-                path_in_repo=CANGKOK_SUBFOLDER,
-                repo_id=UNIFIED_HF_REPO,
-                repo_type="model",
+            _marker = upload_folder_atomic(
+                _api,
+                UNIFIED_HF_REPO,
+                _local_save,
+                CANGKOK_SUBFOLDER,
                 commit_message="Phase 1.5 Vision Grafting: SigLIP + projector dari Gemma 3 4B IT",
             )
+            write_local_provenance(_local_save, _marker)
 
             del _model_tgt, _model_src, _src_params, _processor_orig
             gc.collect()
@@ -1758,6 +1987,7 @@ def _(mo):
 def _(
     DATASET_VISION_REPO,
     SAMPLE_TRAIN_VISION_SFT,
+    SEED,
     VISION_SFT_CONFIG,
     load_dataset,
 ):
@@ -1765,7 +1995,7 @@ def _(
     vision_train_dataset = load_dataset(DATASET_VISION_REPO, VISION_SFT_CONFIG, split="train")
 
     if SAMPLE_TRAIN_VISION_SFT > 0 and len(vision_train_dataset) > SAMPLE_TRAIN_VISION_SFT:
-        vision_train_dataset = vision_train_dataset.shuffle(seed=42).select(range(SAMPLE_TRAIN_VISION_SFT))
+        vision_train_dataset = vision_train_dataset.shuffle(seed=SEED).select(range(SAMPLE_TRAIN_VISION_SFT))
         print(f"  (disampel menjadi {len(vision_train_dataset)})")
     print(f"✅ [DATA] Vision SFT: {len(vision_train_dataset)} sampel.")
     return (vision_train_dataset,)
@@ -1789,11 +2019,14 @@ def _(
     apply_logit_mask,
     cangkok_ready,
     gc,
+    local_provenance_valid,
     orpo_done,
     os,
     pipeline_stage,
+    remote_marker,
     sft_done,
     torch,
+    write_local_provenance,
 ):
     _token = os.environ.get("HF_TOKEN")
 
@@ -1808,6 +2041,12 @@ def _(
     else:
         if sft_done and not orpo_done:
             _model_path = os.path.join(OUTPUT_DIR, JOINT_PREFIX, "sft", "final_adapter")
+            # Staleness guard: adapter lokal hanya sah jika cocok marker remote HF.
+            _marker_sft_adp = remote_marker(UNIFIED_HF_REPO, f"{JOINT_PREFIX}/sft/final_adapter", _token) if _token else None
+            if os.path.isdir(_model_path) and not local_provenance_valid(_model_path, _marker_sft_adp):
+                import shutil as _sh_wipe_adp
+                _sh_wipe_adp.rmtree(_model_path, ignore_errors=True)
+                print(f"  🧹 Cache lokal final_adapter usang (marker remote beda) — dihapus: {_model_path}")
             if not os.path.exists(os.path.join(_model_path, "adapter_config.json")):
                 from huggingface_hub import snapshot_download as _model_snap
                 print(f"📥 [MODEL] Downloading joint/sft/final_adapter dari HF untuk ORPO...")
@@ -1830,6 +2069,7 @@ def _(
                                 os.remove(_dst)
                         _sh_load.move(_src, _dst)
                     _sh_load.rmtree(os.path.join(_model_path, JOINT_PREFIX))
+                write_local_provenance(_model_path, _marker_sft_adp)
             print(f"[MODEL] ORPO stage — load SFT adapter dari: {_model_path}")
             _load_kwargs = dict(
                 model_name=_model_path,
@@ -1839,10 +2079,17 @@ def _(
             )
         else:
             # SFT stage — base = cangkok/ hasil Phase 1.5
+            # Staleness guard: cache lokal hanya sah jika cocok marker remote HF.
             _cangkok_local = "/tmp/v7_vision_cangkok"
+            _marker_cangkok = remote_marker(UNIFIED_HF_REPO, CANGKOK_SUBFOLDER, _token) if _token else None
+            for _cand_dir in (_cangkok_local, os.path.join(OUTPUT_DIR, CANGKOK_SUBFOLDER)):
+                if os.path.isdir(_cand_dir) and not local_provenance_valid(_cand_dir, _marker_cangkok):
+                    import shutil as _sh_wipe_ck
+                    _sh_wipe_ck.rmtree(_cand_dir, ignore_errors=True)
+                    print(f"  🧹 Cache lokal cangkok usang (marker remote beda) — dihapus: {_cand_dir}")
             if os.path.exists(_cangkok_local) and os.path.exists(os.path.join(_cangkok_local, "config.json")):
                 _model_path = _cangkok_local
-                print(f"[MODEL] SFT stage — load base dari lokal: {_model_path}")
+                print(f"[MODEL] SFT stage — load base dari lokal: {_model_path} (provenance valid)")
             else:
                 _model_path = os.path.join(OUTPUT_DIR, CANGKOK_SUBFOLDER)
                 if not os.path.exists(os.path.join(_model_path, "config.json")):
@@ -1867,6 +2114,7 @@ def _(
                                     os.remove(_dst)
                             _sh_cangkok.move(_src, _dst)
                         _sh_cangkok.rmtree(_sub_dir)
+                    write_local_provenance(_model_path, _marker_cangkok)
                 print(f"[MODEL] SFT stage — load base dari local path: {_model_path}")
 
             _load_kwargs = dict(
@@ -2013,8 +2261,8 @@ def _(
 
     # ---- 2. TEKS rows (chat_sft + indoqa_sft -> joint format) ----
     print("[JOINT-SFT] Memuat teks train (chat_sft + indoqa_sft)...")
-    _chat_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "train", SAMPLE_TRAIN_CHAT)
-    _indoqa_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "train", SAMPLE_TRAIN_INDOQA)
+    _chat_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "train", SAMPLE_TRAIN_CHAT, seed=SEED)
+    _indoqa_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "train", SAMPLE_TRAIN_INDOQA, seed=SEED)
     text_rows = text_sft_to_joint(_chat_samples, is_chat=True) + text_sft_to_joint(_indoqa_samples, is_chat=False)
     print(f"  ✅ Text rows total: {len(text_rows)} (chat={len(_chat_samples)}, indoqa={len(_indoqa_samples)})")
 
@@ -2049,8 +2297,8 @@ def _(
     _eval_text_rows = []
     try:
         _per_cfg = max(1, MAX_EVAL_TEXT_SAMPLES // 2)
-        _val_chat = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "validation", _per_cfg)
-        _val_indoqa = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "validation", _per_cfg)
+        _val_chat = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "validation", _per_cfg, seed=SEED)
+        _val_indoqa = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "validation", _per_cfg, seed=SEED)
         _eval_text_rows = text_sft_to_joint(_val_chat, is_chat=True) + text_sft_to_joint(_val_indoqa, is_chat=False)
         print(f"  ✅ Text-only eval (validation HF, cap {MAX_EVAL_TEXT_SAMPLES}): {len(_eval_text_rows)} rows")
     except Exception as e:
@@ -2478,8 +2726,10 @@ def _(
     TrainerState,
     TrainingArguments,
     datetime,
+    delete_remote_prefix,
     os,
     torch,
+    upload_folder_atomic,
 ):
     class VisionTrainingPlotCallback(TrainerCallback):
         def __init__(self, output_dir: str) -> None:
@@ -2518,7 +2768,8 @@ def _(
                     if k.startswith("eval_"):
                         self.eval_data[step][k] = float(v)
 
-            self.plot_chart()
+                # Render chart hanya saat eval (bukan tiap logging step) — hemat CPU.
+                self.plot_chart()
 
         def plot_chart(self) -> None:
             import matplotlib.pyplot as plt
@@ -2829,9 +3080,8 @@ def _(
                     gen_ids = outputs[0].cpu()
                     raw_response = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
 
-                    # Immediately free GPU tensors to prevent cumulative OOM
+                    # Immediately free GPU tensor refs (cache cukup di-clear sekali per event)
                     del inputs, outputs
-                    torch.cuda.empty_cache()
 
                     query = sample["prompt_text"].strip()
                     target = sample["target_text"].strip()
@@ -2911,12 +3161,12 @@ def _(
                         _wf.write(_clean_adapter)
 
                 _api.create_repo(repo_id=self.repo_id, repo_type="model", private=False, exist_ok=True)
-                print(f"\n📤 Uploading {checkpoint_name} to HF {self.hf_prefix}/{self.stage}/...")
-                _api.upload_folder(
-                    folder_path=local_checkpoint_path,
-                    repo_id=self.repo_id,
-                    path_in_repo=f"{self.hf_prefix}/{self.stage}/{checkpoint_name}",
-                    repo_type="model",
+                print(f"\n📤 Uploading {checkpoint_name} to HF {self.hf_prefix}/{self.stage}/ (verified-atomic)...")
+                upload_folder_atomic(
+                    _api,
+                    self.repo_id,
+                    local_checkpoint_path,
+                    f"{self.hf_prefix}/{self.stage}/{checkpoint_name}",
                 )
 
                 if self.output_dir:
@@ -2930,6 +3180,19 @@ def _(
                                 repo_type="model",
                             )
                 print(f"✅ {checkpoint_name} + artifacts uploaded!")
+
+                # Prune remote: sisakan 2 checkpoint terbaru (remote tidak menumpuk tanpa batas)
+                try:
+                    _files_now = _api.list_repo_files(self.repo_id)
+                    _ckpt_dirs = sorted(
+                        {f.split("/")[2] for f in _files_now
+                         if f.startswith(f"{self.hf_prefix}/{self.stage}/checkpoint-") and len(f.split("/")) >= 4},
+                        key=lambda d: int(d.rsplit("-", 1)[1]),
+                    )
+                    for _old_ckpt in _ckpt_dirs[:-2]:
+                        delete_remote_prefix(_api, self.repo_id, f"{self.hf_prefix}/{self.stage}/{_old_ckpt}")
+                except Exception as _e_prune:
+                    print(f"⚠️ Prune remote checkpoint gagal (non-fatal): {_e_prune}")
             except Exception as e:
                 print(f"⚠️ Upload gagal untuk {checkpoint_name}: {e}")
             return control
@@ -3009,6 +3272,7 @@ def _(
     sft_done,
     sft_resume,
     torch,
+    upload_folder_atomic,
     vision_train_dataset,
 ):
     _should_run = RUN_SFT and (not sft_done) and (model is not None)
@@ -3208,6 +3472,7 @@ def _(
                 _checkpoints = sorted([
                     d for d in os.listdir(joint_sft_output_dir)
                     if d.startswith("checkpoint-") and os.path.isdir(os.path.join(joint_sft_output_dir, d))
+                    and os.path.exists(os.path.join(joint_sft_output_dir, d, "adapter_config.json"))
                 ])
                 if _checkpoints:
                     _resume_from = True
@@ -3237,11 +3502,11 @@ def _(
             from huggingface_hub import HfApi as _FinalApi
             _final_api = _FinalApi(token=os.environ.get("HF_TOKEN"))
             _final_api.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
-            _final_api.upload_folder(
-                folder_path=_final_path,
-                repo_id=UNIFIED_HF_REPO,
-                path_in_repo=f"{JOINT_PREFIX}/sft/final_adapter",
-                repo_type="model",
+            upload_folder_atomic(
+                _final_api,
+                UNIFIED_HF_REPO,
+                _final_path,
+                f"{JOINT_PREFIX}/sft/final_adapter",
             )
             print("✅ [JOINT-SFT] Final adapter ter-upload ke joint/sft/final_adapter!")
         except Exception as e:
@@ -3383,7 +3648,7 @@ def _(
 
     # ---- 2. TEKS ORPO (chat_orpo -> joint format) ----
     print("[JOINT-ORPO] Memuat teks ORPO (chat_orpo)...")
-    _text_orpo_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_ORPO_CONFIG, "train", SAMPLE_TRAIN_TEXT_ORPO)
+    _text_orpo_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_ORPO_CONFIG, "train", SAMPLE_TRAIN_TEXT_ORPO, seed=SEED)
     text_orpo_rows = text_orpo_to_joint(_text_orpo_samples)
     print(f"  ✅ Text ORPO rows: {len(text_orpo_rows)}")
 
@@ -3512,6 +3777,7 @@ def _(
     processor,
     raw_orpo_dataset,
     torch,
+    upload_folder_atomic,
 ):
     _should_run = RUN_ORPO and (not orpo_done) and (model is not None)
     if not _should_run:
@@ -3703,6 +3969,7 @@ def _(
                 _checkpoints_o = sorted([
                     d for d in os.listdir(joint_orpo_output_dir)
                     if d.startswith("checkpoint-") and os.path.isdir(os.path.join(joint_orpo_output_dir, d))
+                    and os.path.exists(os.path.join(joint_orpo_output_dir, d, "adapter_config.json"))
                 ])
                 if _checkpoints_o:
                     _resume_from_o = True
@@ -3721,15 +3988,22 @@ def _(
         print(f"\n💾 [JOINT-ORPO] Saving final adapter ke {_final_path_o}...")
         joint_orpo_trainer.save_model(_final_path_o)
         processor.save_pretrained(_final_path_o)
+        # Save chat_template.jinja for easy deployment (konsisten dengan final_adapter SFT)
+        _chat_template_o = getattr(processor, 'chat_template', None) or getattr(getattr(processor, 'tokenizer', None), 'chat_template', None)
+        if _chat_template_o:
+            _jinja_path_o = os.path.join(_final_path_o, "chat_template.jinja")
+            with open(_jinja_path_o, "w", encoding="utf-8") as _f:
+                _f.write(_chat_template_o)
+            print(f"   💾 Chat template saved to {_jinja_path_o}")
         try:
             from huggingface_hub import HfApi as _FinalApiO
             _final_api_o = _FinalApiO(token=os.environ.get("HF_TOKEN"))
             _final_api_o.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
-            _final_api_o.upload_folder(
-                folder_path=_final_path_o,
-                repo_id=UNIFIED_HF_REPO,
-                path_in_repo=f"{JOINT_PREFIX}/orpo/final_adapter",
-                repo_type="model",
+            upload_folder_atomic(
+                _final_api_o,
+                UNIFIED_HF_REPO,
+                _final_path_o,
+                f"{JOINT_PREFIX}/orpo/final_adapter",
             )
             print("✅ [JOINT-ORPO] Final adapter ter-upload ke joint/orpo/final_adapter!")
             _orpo_upload_ok = True
@@ -3773,8 +4047,13 @@ def _(
     _orpo_adapter_exists = any(
         f.startswith(f"{JOINT_PREFIX}/orpo/final_adapter/") for f in _files
     )
+    _sft_adapter_exists = any(
+        f.startswith(f"{JOINT_PREFIX}/sft/final_adapter/") for f in _files
+    )
+    # Fallback: kalau adapter ORPO belum ada (mis. RUN_ORPO=False), merge dari SFT.
+    _adapter_stage = "orpo" if _orpo_adapter_exists else ("sft" if _sft_adapter_exists else None)
 
-    _should_merge = (model is not None or _orpo_adapter_exists) and not final_done
+    _should_merge = (model is not None or _adapter_stage is not None) and not final_done
     final_upload_dir = os.path.join(OUTPUT_DIR, "hf_upload")
 
     if not _should_merge:
@@ -3783,7 +4062,7 @@ def _(
             + (
                 f"`{FINAL_PREFIX}/merged_bf16` sudah ada di repo."
                 if final_done
-                else "adapter ORPO belum ada & model tidak dimuat (training belum selesai)."
+                else "adapter ORPO/SFT belum ada & model tidak dimuat (training belum selesai)."
             )
         )
     else:
@@ -3856,17 +4135,20 @@ def _(
         if _model_to_merge is None:
             from unsloth import FastVisionModel as _FVMerge
 
-            _orpo_path = os.path.join(OUTPUT_DIR, JOINT_PREFIX, "orpo", "final_adapter")
+            if _adapter_stage is None:
+                raise RuntimeError("[MERGE] Tidak ada adapter (orpo/sft) untuk di-merge!")
+
+            _orpo_path = os.path.join(OUTPUT_DIR, JOINT_PREFIX, _adapter_stage, "final_adapter")
             if not os.path.exists(_orpo_path):
                 from huggingface_hub import snapshot_download as _merge_snap
-                print("📥 [MERGE] Downloading joint/orpo/final_adapter dari HF untuk merging...")
+                print(f"📥 [MERGE] Downloading {_adapter_stage}/final_adapter dari HF untuk merging...")
                 _merge_snap(
                     repo_id=UNIFIED_HF_REPO,
                     local_dir=_orpo_path,
-                    allow_patterns=[f"{JOINT_PREFIX}/orpo/final_adapter/**"],
+                    allow_patterns=[f"{JOINT_PREFIX}/{_adapter_stage}/final_adapter/**"],
                     token=_token,
                 )
-                _sub_path = os.path.join(_orpo_path, JOINT_PREFIX, "orpo", "final_adapter")
+                _sub_path = os.path.join(_orpo_path, JOINT_PREFIX, _adapter_stage, "final_adapter")
                 if os.path.exists(_sub_path):
                     import shutil as _shutil_m
                     for _mi in os.listdir(_sub_path):
@@ -3880,7 +4162,7 @@ def _(
                         _shutil_m.move(_src_m, _dst_m)
                     _shutil_m.rmtree(os.path.join(_orpo_path, JOINT_PREFIX))
 
-            print(f"📂 [MERGE] Loading model dari ORPO adapter: {_orpo_path}")
+            print(f"📂 [MERGE] Loading model dari adapter {_adapter_stage}: {_orpo_path}")
             _model_to_merge, _merge_tokenizer = _FVMerge.from_pretrained(
                 model_name=_orpo_path,
                 load_in_4bit=LOAD_IN_4BIT,
@@ -3915,24 +4197,24 @@ def _(
 
 
 @app.cell
-def _(FINAL_PREFIX, UNIFIED_HF_REPO, final_upload_dir, os):
+def _(FINAL_PREFIX, UNIFIED_HF_REPO, final_upload_dir, os, upload_folder_atomic):
     from huggingface_hub import HfApi as _UpFinalApi
 
     _has_merged = os.path.exists(os.path.join(final_upload_dir, "merged_bf16", "config.json"))
     if not _has_merged:
         print("⏭️ [UPLOAD] Tidak ada hasil merge lokal — upload final dilewati.")
     else:
-        print(f"[UPLOAD] Mengunggah hasil merge ke {UNIFIED_HF_REPO}/{FINAL_PREFIX}...")
+        print(f"[UPLOAD] Mengunggah hasil merge ke {UNIFIED_HF_REPO}/{FINAL_PREFIX} (verified-atomic per subfolder)...")
         try:
             _final_up_api = _UpFinalApi(token=os.environ.get("HF_TOKEN"))
             _final_up_api.create_repo(repo_id=UNIFIED_HF_REPO, repo_type="model", private=False, exist_ok=True)
 
-            _final_up_api.upload_folder(
-                folder_path=final_upload_dir,
-                path_in_repo=FINAL_PREFIX,
-                repo_id=UNIFIED_HF_REPO,
-                repo_type="model",
-            )
+            for _sub in ("merged_bf16", "quantized_4bit"):
+                _p = os.path.join(final_upload_dir, _sub)
+                if os.path.exists(os.path.join(_p, "config.json")):
+                    upload_folder_atomic(_final_up_api, UNIFIED_HF_REPO, _p, f"{FINAL_PREFIX}/{_sub}")
+                else:
+                    print(f"  ⚠️ [UPLOAD] Subfolder {_sub} tidak lengkap (config.json hilang) — dilewati.")
 
             print("✅ [UPLOAD] final/merged_bf16 & final/quantized_4bit ter-upload!")
         except Exception as e:
@@ -4003,6 +4285,7 @@ def _(
     GEN_REPETITION_PENALTY,
     GEN_TEMPERATURE,
     GEN_TOP_P,
+    SEED,
     TEXT_CHAT_CONFIG,
     TEXT_INDOQA_CONFIG,
     format_encoder_from_raw,
@@ -4063,7 +4346,7 @@ def _(
                     "prompt_text": format_encoder_from_raw(_row.get("input", "")),
                     "target_text": _row.get("target", "").strip(),
                 })
-            random.seed(42)
+            random.seed(SEED)
             random.shuffle(_val_rows)
             eval_samples = _val_rows[:20]
             print(f"[EVAL] {len(eval_samples)} sampel validasi teks dimuat.")
