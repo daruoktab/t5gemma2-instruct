@@ -544,19 +544,6 @@ def _():
         bertscore_metric = None
         meteor_metric = None
 
-    # Probe satu kali backbone BERTScore (google/embeddinggemma-300m = GATED repo):
-    # tanpa akses/token valid → BERTScore dinonaktifkan dengan 1 pesan jelas,
-    # alih-alih melempar stack-trace 401 di SETIAP titik eval.
-    if bertscore_metric is not None:
-        try:
-            cast(Any, bertscore_metric).compute(
-                predictions=["tes"], references=["tes"],
-                model_type="google/embeddinggemma-300m", num_layers=12, lang="id",
-            )
-        except Exception as _e_bs:
-            print(f"ℹ️ BERTScore dinonaktifkan (probe gagal): {_e_bs}")
-            bertscore_metric = None
-
     # ---- LOGIT MASKING (decoder lm_head) ----
     def apply_logit_mask(model, suppress_ids):
         _cfg = getattr(model, "config", model)
@@ -2763,6 +2750,11 @@ def _(
     rouge_metric,
 ):
     def make_compute_metrics(processor):
+        # Probe BERTScore LAZY di eval pertama (DAG-safe: terjadi SETELAH cell login).
+        # google/embeddinggemma-300m itu GATED; tanpa lisensi/token → satu pesan
+        # bersih lalu diskip, bukan stack-trace 401 di setiap titik eval.
+        _bs_state = {"available": None}  # None = belum di-probe
+
         def _compute_metrics(eval_preds):
             metrics = {}
             if rouge_metric is None and bleu_metric is None:
@@ -2809,15 +2801,26 @@ def _(
                     print(f"Error during Exact Match: {e}")
 
             if bertscore_metric is not None:
-                try:
-                    bertscore_result = cast(Any, bertscore_metric).compute(
-                        predictions=decoded_preds, references=decoded_labels,
-                        model_type="google/embeddinggemma-300m", num_layers=12, lang="id"
-                    )
-                    if bertscore_result is not None and "f1" in bertscore_result:
-                        metrics["bertscore_f1"] = np.mean(bertscore_result["f1"]) * 100
-                except Exception as e:
-                    print(f"Error during BERTScore: {e}")
+                if _bs_state["available"] is None:
+                    try:
+                        cast(Any, bertscore_metric).compute(
+                            predictions=["probe"], references=["probe"],
+                            model_type="google/embeddinggemma-300m", num_layers=12, lang="id",
+                        )
+                        _bs_state["available"] = True
+                    except Exception as _e_bs:
+                        print(f"ℹ️ BERTScore dinonaktifkan (probe gagal di eval pertama): {_e_bs}")
+                        _bs_state["available"] = False
+                if _bs_state["available"]:
+                    try:
+                        bertscore_result = cast(Any, bertscore_metric).compute(
+                            predictions=decoded_preds, references=decoded_labels,
+                            model_type="google/embeddinggemma-300m", num_layers=12, lang="id"
+                        )
+                        if bertscore_result is not None and "f1" in bertscore_result:
+                            metrics["bertscore_f1"] = np.mean(bertscore_result["f1"]) * 100
+                    except Exception as e:
+                        print(f"Error during BERTScore: {e}")
 
             if meteor_metric is not None:
                 try:
