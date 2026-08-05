@@ -1,0 +1,26 @@
+docs/sessions/papers_deep_dive/fetch_and_render.py
+  s_959b817dcf7f84::t_24023250c5a558 1-77
+docs/sessions/papers_deep_dive/pdfs/TLPO_2604.26553.pdf
+  s_959b817dcf7f84::t_f05815fdb3ef5b 1-12297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d83400958c565c794784cd2014109811a9a1f425",
+  "prompts": {},
+  "humans": {
+    "h_4e362b87d6c27d": {
+      "author": "daruoktab <daruokta@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_959b817dcf7f84": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_02f55c579ffeeWFw7xhVyKDBF2",
+        "model": "unknown"
+      },
+      "human_author": "daruoktab <daruokta@gmail.com>"
+    }
+  }
+}
