@@ -1,30 +1,37 @@
-# 🇮🇩 T5-Gemma-2 Instruct & Chat Pipeline (Bahasa Indonesia)
+# 🇮🇩 T5-Gemma-2 Instruct & Multimodal Chat Pipeline (Bahasa Indonesia)
 
-Pipeline instruksi dan percakapan (instruction-tuning & chat) berbasis arsitektur **Encoder-Decoder (Seq2Seq)** menggunakan **T5-Gemma-2 (4B & 270M)** yang dioptimalkan secara penuh menggunakan metode **Supervised Fine-Tuning (SFT)** dan **Direct Preference Optimization (DPO)**.
-
----
-
-## 🖼️ Project Infographic & Training Flow
-
-Berikut adalah visualisasi arsitektur, spesifikasi dataset, dan alur pelatihan proyek ini:
-
-### 1. Project Infographic
-![Project Infographic](docs/project-infographic.png)
-
-### 2. Dataset Specification
-![Dataset Specification](docs/dataset_2500_spec.png)
+Pipeline instruksi dan percakapan (instruction-tuning, multimodal vision, & chat) berbasis arsitektur **Encoder-Decoder (Seq2Seq)** menggunakan **T5-Gemma-2 (4B & 270M)** yang dioptimalkan secara penuh menggunakan metode **Supervised Fine-Tuning (SFT)**, **Joint Multimodal Training (V7)**, dan **Odds Ratio Preference Optimization (ORPO)** via Unsloth Seq2Seq.
 
 ---
 
 ## 🚀 Deskripsi Proyek (Project Overview)
 
-Proyek ini dirancang untuk melatih dan menguji model **T5-Gemma-2** agar optimal dalam memahami dan merespons instruksi serta percakapan dalam **Bahasa Indonesia** (prioritas utama) dan **Bahasa Inggris** (sekunder/bilingual). 
+Proyek ini dirancang untuk melatih dan menguji model **T5-Gemma-2** agar optimal dalam memahami dan merespons instruksi, percakapan teks, serta pemahaman visual (multimodal) dalam **Bahasa Indonesia** (prioritas utama) dan **Bahasa Inggris** (bilingual).
 
-### Mengapa Memilih Arsitektur Encoder-Decoder (Seq2Seq)?
-Meskipun arsitektur *decoder-only* mendominasi lanskap LLM saat ini, arsitektur *encoder-decoder* seperti T5-Gemma-2 menawarkan keunggulan unik:
-1. **Asymmetric Processing**: Sangat efisien untuk tugas dengan input panjang (konteks/dokumen) yang menghasilkan output pendek (respons/ringkasan).
-2. **Explicit Cross-Attention**: Encoder memproses seluruh input secara bidirectional sebelum decoder bekerja, mencegah masalah *attention degeneration* (lupa detail awal).
-3. **Task Flexibility**: Sangat unggul dalam tugas terstruktur seperti peringkasan (*summarization*), penerjemahan (*translation*), ekstraksi data, dan *grounded QA* di tengah percakapan.
+### 💡 Mengapa Memilih Arsitektur Encoder-Decoder (Seq2Seq)?
+
+Di tengah dominasi mutlak arsitektur *decoder-only* pada standar industri chatbot modern, penggunaan model *encoder-decoder* (Seq2Seq) untuk *instruct & conversational agent* tergolong sangat langka dan menjadi subjek eksplorasi yang menarik. Proyek ini dibangun di atas rasa penasaran ilmiah (*research curiosity*) untuk menguji potensi penuh arsitektur Seq2Seq multimodal modern (**T5-Gemma-2**) pada Bahasa Indonesia:
+
+1. **Pemrosesan Input Kompleks & Asimetris (Hard Tasks)**:
+   - **Deep Context Processing**: Encoder memproses seluruh konteks masukan (teks instruksi + SigLIP 256 soft tokens) secara *bidirectional* penuh tanpa batas kausalitas. Hal ini memaksa jaringan untuk mencerna dan memahami struktur input yang kompleks/panjang sebelum Decoder memproduksi keluaran.
+   - Sangat unggul untuk tugas-tugas *asymmetric* (input panjang/kompleks $\to$ respons terstruktur) seperti peringkasan (*summarization*), penerjemahan (*translation*), analisis dokumen visual, dan *grounded QA*.
+
+2. **Verifikasi Intent Implisit via Task Prefixing (`<unused1>` – `<unused6>`)**:
+   - Tanpa perlu membebani prompt user dengan awalan kaku, Decoder dilatih untuk secara mandiri memunculkan **Task Prefix** di awal generasi menggunakan 6 *Unused Tokens* khusus (ID 7 hingga 12).
+   - **Tabel Pemetaan Task Prefix (Unused Tokens 1–6)**:
+     | Token ID | Unused Token | Kategori Task | Deskripsi Fungsi |
+     |---|---|---|---|
+     | `7` | `<unused1>` | **SUMMARIZE** | Peringkasan teks & ekstraksi poin utama |
+     | `8` | `<unused2>` | **TRANSLATE** | Penerjemahan antar bahasa (Indo ↔ Eng) |
+     | `9` | `<unused3>` | **NER** | Ekstraksi entitas (*Named Entity Recognition*) |
+     | `10` | `<unused4>` | **QA** | Tanya-Jawab berbasis dokumen (*Grounded QA*) |
+     | `11` | `<unused5>` | **PARAPHRASE** | Penulisan ulang & penyuntingan gaya bahasa |
+     | `12` | `<unused6>` | **GENERAL_CHAT** | Percakapan umum & dialog interaktif (*Casual Chat*) |
+   - Mekanisme ini berfungsi sebagai **verifikasi intent eksplisit**: Kita dapat mengonfirmasi apakah internal state model benar-benar memahami jenis tugas yang diperintahkan sebelum ia menghasilkan respons utama.
+
+3. **Optimasi Arsitektural Google T5Gemma 2**:
+   - **Merged Attention**: Menyatukan Self-Attention dan Cross-Attention di dalam decoder ($K, V = [X; H]$), mengeliminasi modul terpisah dan menghemat beban komputasi.
+   - **Tied Embeddings**: Berbagi matriks token embedding yang identik antara Encoder, Decoder, dan LM Head ($262.144$ vocab size) untuk penyelarasan ruang representasi input-output.
 
 ---
 
@@ -38,122 +45,49 @@ T5-Gemma-2 dibangun melalui adaptasi model Gemma 3 menggunakan metode UL2.
 | **Model Type** | `gemma3` | `t5gemma2` |
 | **Total Parameter** | **~4.28B** (3.88B text + 0.4B vision) | **~7.51B** (3.88B enc + 3.88B dec + 0.4B vis) |
 | **Attention** | Standard Self-Attention | **Merged Attention** (Self + Cross) |
+| **Vision Tower** | SigLIP (Hidden 1152) | SigLIP (Hidden 1152) — Identik |
 | **Tied Embeddings** | ✅ Yes (Embed ↔ Head) | ✅ Yes (Enc ↔ Dec ↔ Head) |
-| **Vocab Size** | 262,208 (extra 64 padding) | 262,144 (exact) |
+| **Vocab Size** | 262,208 (extra 64 padding) | **262,144** (exact) |
 
 ### Mekanisme Merged Attention
 T5-Gemma-2 tidak memiliki modul `cross_attention` terpisah di decoder. Sebagai gantinya, ia menggunakan **Merged Attention**:
-- **Query (Q)**: Dibentuk dari decoder hidden states.
-- **Key (K) & Value (V)**: Dibentuk dengan menggabungkan (*concatenate*) decoder input dan encoder output secara sekuensial.
-- **Masking**: Kombinasi bidirectional (untuk token encoder) dan causal (untuk token decoder).
+- **Query (Q)**: Dibentuk dari decoder hidden states ($X$).
+- **Key (K) & Value (V)**: Dibentuk dengan mengkonkatenasi decoder input ($X$) dan encoder output ($H$) secara sekuensial: $[X; H]$.
+- **Masking**: Kombinasi bidirectional (untuk token encoder $H$) dan causal (untuk token decoder $X$).
 
 ---
 
-## 🎯 Metode Pelatihan: Supervised Fine-Tuning (SFT) & Alignment (DPO)
+## 🎯 Dataset & Model Checkpoints (HuggingFace Hub)
 
-Proyek ini melatih model secara langsung menggunakan kombinasi SFT dan DPO pada dataset Bahasa Indonesia berkadar tinggi, menghindari kompleksitas transplantasi bobot:
+### 📦 Dataset Repositories (`daruokta`):
+1. **[`daruokta/t5gemma2-indonesia-chat-formatted`](https://huggingface.co/datasets/daruokta/t5gemma2-indonesia-chat-formatted)**:
+   - `chat_sft`: **36.015** baris SFT flattened (181.7 MB).
+   - `chat_multiturn`: **3.000** percakapan utuh unflattened (23.9 MB).
+   - `chat_orpo`: **1.000** pasang preferensi teks.
+   - `indoqa_sft` & `indoqa_documents`: **3.309** pasang Q&A dokumen.
+2. **[`daruokta/t5gemma2-indonesia-vision-formatted`](https://huggingface.co/datasets/daruokta/t5gemma2-indonesia-vision-formatted)**:
+   - `vision_sft`: **1.000** percakapan multimodal utuh (3,04 GB, ekuivalen 3.964 assistant turns).
+   - `vision_orpo`: **200** pasang preferensi vision (510.4 MB).
+3. **[`daruokta/t5-gemma-2-multimodal-embedding`](https://huggingface.co/datasets/daruokta/t5-gemma-2-multimodal-embedding)**:
+   - Subset NLI, Parallel Translation (2.2M rows), Retrieval, STS, dan Vision STS.
 
-1. **Supervised Fine-Tuning (SFT)**:
-   - **T5-Gemma-2 270M**: Pelatihan ringan untuk iterasi cepat dan *smoke testing*.
-   - **T5-Gemma-2 4B-4B**: Pelatihan penuh menggunakan LoRA $(r=128, \alpha=256)$ melatih ~755 juta parameter (~10.6% dari total model) pada seluruh dataset (31.299 sampel).
-2. **Logit Masking**:
-   - Memblokir logits untuk token yang tidak digunakan (*unused tokens*) dan token visual di encoder guna memastikan stabilitas generasi teks dan mencegah halusinasi token non-teks.
-3. **Implicit Task Steering & Unused Tokens as Task Prefix**:
-   - Melatih encoder secara implisit untuk memetakan representasi *hidden states* dari input *user* yang murni menggunakan bahasa natural tanpa awalan kaku.
-   - Di sisi decoder, model akan mendeteksi intent dari percakapan dan secara mandiri mendeklarasikan *task prefix* menggunakan **Unused Tokens** (seperti `<unused1>` untuk *summarize*, `<unused2>` untuk *translate*) sesaat setelah token awal (BOS) sebelum menghasilkan teks utama. Ini berfungsi sebagai konfirmasi *intent* (mirip *Chain-of-Thought* tugas ringkas) yang meningkatkan koherensi respons *multi-task* secara drastis, tanpa perlu mencemari bahasa natural dengan *prompt user* berformat khusus.
-
----
-
-## 📊 Dataset Spesifikasi (Update V2)
-
-Dataset yang digunakan berfokus pada kualitas tinggi dan format multi-turn dalam Bahasa Indonesia:
-1. **`chat_multiturn`**: 3.000 percakapan utuh multi-turn (500 data Agentic Prefix-Task baru, beserta 2.500 data lama yang telah dikonversi menyeluruh agar formatnya konsisten dengan data baru). Saat dipecah (unroll) untuk data latih (SFT), total menjadi 36.015 baris (turn) pelatihan SFT.
-2. **`indoqa_documents`**: ~4.400 contoh pemahaman bacaan dan Q&A berbasis dokumen Indonesia.
-
-Format data menggunakan skema OpenAI/ChatML standar:
-```json
-{
-  "messages": [
-    {"role": "system", "content": "Sistem prompt Bahasa Indonesia..."},
-    {"role": "user", "content": "Pertanyaan user..."},
-    {"role": "assistant", "content": "Jawaban model..."}
-  ]
-}
-```
-
----
-
-## ⚙️ Pipeline Pelatihan & Validasi
-
-### 1. Persiapan Data (Data Preprocessing)
-Gabungkan dataset mentah dan lakukan pemisahan data training serta validasi:
-```powershell
-# 1. Merge nested conversation base + extra
-python scripts/dataset/merge_nested_conversations_jsonl.py
-
-# 2. Rebuild chat_train.jsonl dan chat_val.jsonl
-python scripts/dataset/rebuild_chat_sft_from_nested.py
-
-# 3. Trim IndoQA dataset ke 2.500 baris untuk kurasi optimal
-python scripts/dataset/trim_indoqa_train.py
-```
-
-### 2. Menjalankan Supervised Fine-Tuning (SFT)
-Kami menyediakan skrip untuk model versi ringan (270M) untuk iterasi cepat, serta versi penuh (4B):
-```powershell
-# Jalankan SFT 270M (Smoke test / Lightweight training)
-python scripts/training/train_clean_270m.py
-
-# Jalankan SFT 4B LoRA (A100 GPU)
-python scripts/training/train_clean_4b.py
-```
-
-### 3. Alignment dengan DPO
-Gunakan Direct Preference Optimization untuk mematangkan gaya bahasa asisten dan meminimalkan halusinasi:
-```powershell
-# Generate dataset preferensi DPO
-python scripts/dataset/generate_dataset_preferences_deepseek.py
-
-# Jalankan DPO training (lightweight)
-python scripts/training/train_dpo_270m_light.py
-```
-
----
-
-## 💬 Web-based Chat Simulator
-
-Proyek ini dilengkapi dengan aplikasi simulasi chat berbasis web (Flask) untuk menguji model secara langsung melalui antarmuka web interaktif yang modern.
-
-### Cara Menjalankan Chat Simulator:
-1. Pastikan Anda berada di environment Python yang sesuai.
-2. Jalankan server Flask:
-   ```powershell
-   python app/server.py
-   ```
-3. Buka browser Anda dan akses: `http://127.0.0.1:5000`
+### 🤖 Model Checkpoints:
+- **Joint Multimodal V7 Checkpoint:** [`daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v7-joint-unsloth`](https://huggingface.co/daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v7-joint-unsloth)
+- **Vision Cangkok Base Checkpoint:** [`daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-vision-cangkok`](https://huggingface.co/daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v4-vision-cangkok)
 
 ---
 
 ## 🦥 Integrasi Unsloth (Patch Seq2Seq / T5-Gemma-2)
 
-Untuk mempercepat proses pelatihan model **T5-Gemma-2** tanpa kendala memori (VRAM), proyek ini mendukung integrasi dengan **Unsloth** versi terbaru yang telah di-patch secara khusus untuk mendukung arsitektur *Encoder-Decoder* (Seq2Seq).
+Untuk mempercepat pelatihan model **T5-Gemma-2** dan efisiensi VRAM, proyek ini menggunakan **Unsloth** branch Seq2Seq (`dh/recover-3153-seq2seq`) dengan patch wajib untuk environment modern:
 
-### Mengapa Membutuhkan Patch Kustom?
-Unsloth secara default hanya mendukung arsitektur *Decoder-only* (seperti Llama, Mistral, Gemma 2 CausalLM). Jika langsung digunakan untuk Seq2Seq, model akan gagal dimuat atau mengalami crash *shape mismatch* karena panjang token input dan label yang berbeda. Patch kustom kami membenahi:
-1. **Routing Model**: Mengarahkan pemuatan ke `AutoModelForSeq2SeqLM`.
-2. **Task Type Mapping**: Memetakan LoRA ke `TaskType.SEQ_2_SEQ_LM`.
-3. **Bypass Batch Sampler**: Melewati pemeriksaan dimensi *causal* yang kaku ketika mendeteksi arsitektur encoder-decoder.
+### Patch Kustom:
+1. **NameError Fix (`_utils.py`)**: Penambahan import dinamis `auto_docstring` dan `strict`.
+2. **PEFT Import Fix (`import_utils.py`)**: Penanganan `is_gptqmodel_available()` pada PEFT 0.19+.
+3. **Encoder-Decoder Batch Sampler Fix (`_utils.py`)**: Bypass `_unsloth_get_batch_samples` jika `is_encoder_decoder == True` untuk mencegah `RuntimeError` mismatch dimensi token input vs label.
 
-### Cara Instalasi Unsloth Patched:
-Kami telah menyediakan *fork* repositori Unsloth yang sudah ter-patch di GitHub: [daruoktab/unsloth](https://github.com/daruoktab/unsloth). Instal menggunakan perintah berikut pada environment Anda:
-```powershell
-uv pip install --force-reinstall --no-deps git+https://github.com/daruoktab/unsloth.git
-```
-
-### Jalankan Pelatihan Pengujian (Test Training Script):
-Gunakan skrip pengujian berikut untuk memastikan modul terinstal dan berjalan dengan benar:
-```powershell
-python scratch/test_unsloth_training.py
+```bash
+pip install --force-reinstall --no-deps "git+https://github.com/unslothai/unsloth.git@dh/recover-3153-seq2seq"
 ```
 
 ---
@@ -161,31 +95,37 @@ python scratch/test_unsloth_training.py
 ## 📂 Struktur Direktori Proyek
 
 ```directory
-t5-gemma-2-instruct/
-├── app/                      # Aplikasi Web Chat Simulator
-│   ├── server.py             # Backend Flask
-│   └── templates/            # Frontend HTML/CSS
-├── data/                     # Dataset (Chat & IndoQA)
-├── docs/                     # Dokumentasi Master, Spesifikasi & Sesi Riset
-│   ├── ARCHITECTURE_MASTER.md
-│   ├── T5GEMMA_2_INSTRUCT_MASTER_SPECIFICATION.md
-│   ├── Debugging Vision Model Performance.md
-│   ├── diagnostic_report.md
-│   ├── sessions/             # Catatan & log sesi riset
-│   └── paper/                # PDF referensi paper & publikasi
-├── notebooks/                # Notebooks & Skrip Pelatihan Cloud (Marimo)
-│   ├── working-molab-v7-combined-unsloth.py   # Versi Aktif Joint Multimodal
-│   └── legacy/               # Notebooks versi terdahulu (v3-v6)
-├── scripts/                  # Kumpulan Skrip Fungsional (Python)
-│   ├── analysis/             # Analisis token & arsitektur
-│   ├── dataset/              # Pembuatan & pembersihan dataset
-│   ├── eval/                 # Evaluasi model & metrik
-│   ├── tests/                # Unit testing inference & loss
-│   └── training/             # Skrip pelatihan SFT dan DPO
-├── inference.py              # Skrip inferensi CLI utama
-├── .gitignore                # Konfigurasi pengabaian file Git
-└── README.md                 # Dokumentasi utama (File ini)
+instruct/
+├── app/                                        # Aplikasi Web Chat Simulator (Flask)
+│   ├── server.py                               # Backend Flask
+│   └── templates/                              # Antarmuka Web
+├── data/                                       # Dataset Lokal (SFT, Multimodal, Preference)
+├── docs/                                       # Knowledge Base Utama
+│   ├── README.md                               # Master Index Dokumen
+│   ├── 01_architecture/                        # Spesifikasi Arsitektur & Merged Attention
+│   ├── 02_guides/                              # Panduan Finetuning Unsloth, ORPO, & Dataset
+│   ├── 03_research_and_diagnostics/            # Riset V7 Combined, Vision Cangkok, & Logit Masking
+│   ├── 04_specifications/                      # API Reference, Paper Guide, & HTML Dashboard
+│   ├── paper/                                  # Reference PDFs (ArXiv)
+│   └── sessions/                               # Catatan Sesi Riset Harian
+├── notebooks/                                  # Notebooks Pelatihan (Marimo / Cloud)
+│   ├── working-molab-v7-combined-unsloth.py    # PIPELINE UTAMA ACTIVE (Text + Vision Joint SFT)
+│   └── legacy/                                 # Archive Notebooks (V3 s.d. V6-Vision)
+├── scratch/                                    # Skrip Utility & Audit Eksperimen
+├── inference.py                                # Skrip Inferensi CLI Utama
+└── README.md                                   # Dokumentasi Utama Repo Ini
 ```
 
 ---
-*Proyek ini dikembangkan secara aktif untuk eksplorasi arsitektur Seq2Seq pada LLM generasi baru (Gemma 3 & T5-Gemma-2) dalam konteks Bahasa Indonesia.*
+
+## 💬 Menjalankan Web Chat Simulator
+
+1. Pastikan environment Python aktif.
+2. Jalankan server Flask:
+   ```powershell
+   python app/server.py
+   ```
+3. Akses antarmuka di browser: `http://127.0.0.1:5000`
+
+---
+*Proyek ini dikembangkan secara aktif untuk eksplorasi arsitektur Seq2Seq Multimodal pada LLM generasi baru (T5-Gemma-2) dalam konteks Bahasa Indonesia.*
