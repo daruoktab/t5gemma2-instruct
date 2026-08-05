@@ -26,7 +26,7 @@ docs/
 │   ├── dataset_spec.html
 │   └── project-infographic.png
 ├── 📁 paper/                        ← ArXiv Reference PDFs (T5, Gemma 3, PEFT, Task Vector, dll.)
-└── 📁 sessions/                     ← Log Sesi & Review Paper Harian
+└── 📁 sessions/                     ← Log Sesi, Review Paper Harian & Deep Dives (papers_deep_dive/)
 ```
 
 ---
