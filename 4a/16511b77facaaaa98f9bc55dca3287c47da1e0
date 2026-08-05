@@ -1,0 +1,16 @@
+scripts/dataset/generate_conv_extra_20260802.py
+  h_4e362b87d6c27d 1-1301
+.gitignore
+  h_4e362b87d6c27d 35-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "4a16511b77facaaaa98f9bc55dca3287c47da1e0",
+  "prompts": {},
+  "humans": {
+    "h_4e362b87d6c27d": {
+      "author": "daruoktab <daruokta@gmail.com>"
+    }
+  }
+}
