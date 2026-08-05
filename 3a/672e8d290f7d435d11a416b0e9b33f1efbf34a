@@ -1,0 +1,16 @@
+opencode-modal.json.txt
+  h_4e362b87d6c27d 1-31
+scripts/dataset/generate_conv_extra_20260802.py
+  h_4e362b87d6c27d 1-1301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "3a672e8d290f7d435d11a416b0e9b33f1efbf34a",
+  "prompts": {},
+  "humans": {
+    "h_4e362b87d6c27d": {
+      "author": "daruoktab <daruokta@gmail.com>"
+    }
+  }
+}
