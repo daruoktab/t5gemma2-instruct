@@ -582,6 +582,65 @@ def _():
             model._logit_mask_hook_registered = True
             print(f"  ✅ Logit mask (fallback) untuk {len(sl)} tokens.")
 
+    # ---- NEFTune COMPATIBILITY PATCH (T5Gemma2TextScaledWordEmbedding) ----
+    def patch_neftune_compatibility(model):
+        if model is None or not hasattr(model, "get_input_embeddings"):
+            return
+        embeds = model.get_input_embeddings()
+        if embeds is not None:
+            embed_cls = type(embeds)
+            if not hasattr(embed_cls, "neftune_noise_alpha"):
+                setattr(embed_cls, "neftune_noise_alpha", None)
+            if not hasattr(embeds, "neftune_noise_alpha"):
+                setattr(embeds, "neftune_noise_alpha", None)
+            if hasattr(embeds, "embed_tokens"):
+                if not hasattr(type(embeds.embed_tokens), "neftune_noise_alpha"):
+                    setattr(type(embeds.embed_tokens), "neftune_noise_alpha", None)
+                if not hasattr(embeds.embed_tokens, "neftune_noise_alpha"):
+                    setattr(embeds.embed_tokens, "neftune_noise_alpha", None)
+            print("  ✅ NEFTune compatibility patch terpasang pada embedding layer.")
+
+    # ---- BFLOAT16 DTYPE CASTING HELPER (Vision Tower LayerNorm & Float32 Params) ----
+    def cast_model_to_bfloat16(model):
+        if model is None:
+            return
+        _targets = [model]
+        if hasattr(model, "base_model"):
+            _targets.append(model.base_model)
+            if hasattr(model.base_model, "model"):
+                _targets.append(model.base_model.model)
+        for _tgt in _targets:
+            if hasattr(_tgt, "vision_tower") and _tgt.vision_tower is not None:
+                try:
+                    _tgt.vision_tower.to(torch.bfloat16)
+                except Exception:
+                    pass
+            if hasattr(_tgt, "multi_modal_projector") and _tgt.multi_modal_projector is not None:
+                try:
+                    _tgt.multi_modal_projector.to(torch.bfloat16)
+                except Exception:
+                    pass
+        _n_cast = 0
+        for m in model.modules():
+            if hasattr(m, "weight") and isinstance(getattr(m, "weight", None), torch.Tensor):
+                if m.weight.dtype == torch.float32:
+                    m.weight.data = m.weight.data.to(torch.bfloat16)
+                    _n_cast += 1
+            if hasattr(m, "bias") and isinstance(getattr(m, "bias", None), torch.Tensor):
+                if m.bias.dtype == torch.float32:
+                    m.bias.data = m.bias.data.to(torch.bfloat16)
+                    _n_cast += 1
+        for p in model.parameters():
+            if p.dtype == torch.float32:
+                p.data = p.data.to(torch.bfloat16)
+                _n_cast += 1
+        for b in model.buffers():
+            if b.dtype == torch.float32:
+                b.data = b.data.to(torch.bfloat16)
+                _n_cast += 1
+        if _n_cast > 0:
+            print(f"  ✅ Cast {_n_cast} tensor/layer float32 → bfloat16 (vision_tower & modules).")
+
     return (
         Any,
         AutoProcessor,
@@ -595,6 +654,8 @@ def _():
         TrainerState,
         TrainingArguments,
         apply_logit_mask,
+        cast_model_to_bfloat16,
+        patch_neftune_compatibility,
         bertscore_metric,
         bleu_metric,
         cast,
@@ -1358,6 +1419,13 @@ def _(BASE_T5_MODEL, os):
             for _fn in _fnames:
                 _full = os.path.join(_root, _fn)
                 _rel = os.path.relpath(_full, folder_path).replace("\\", "/")
+                _parts = _rel.split("/")
+                _is_ignored = any(
+                    p.startswith(".") or p.endswith(".lock") or p.endswith(".metadata") or p == "CACHEDIR.TAG" or p == "_hf_provenance.json"
+                    for p in _parts
+                )
+                if _is_ignored:
+                    continue
                 local_files.append(_rel)
                 total_bytes += os.path.getsize(_full)
 
@@ -2670,10 +2738,12 @@ def _(F, SelectiveLabelSmoother, Seq2SeqTrainer, torch):
             )
             clp = self.get_batch_logps(co.logits, cl)
             rlp = self.get_batch_logps(ro.logits, rl)
-            cp = clp.exp().clamp(1e-7, 1-1e-7)
-            rp = rlp.exp().clamp(1e-7, 1-1e-7)
-            clo = torch.log(cp / (1 - cp))
-            rlo = torch.log(rp / (1 - rp))
+            # Formula log-odds yang stabil secara numerik (mencegah saturation/underflow pada bfloat16):
+            # log(P / (1 - P)) = logps - log1p(-exp(logps))
+            _clp_clamped = clp.clamp(max=-1e-7)
+            _rlp_clamped = rlp.clamp(max=-1e-7)
+            clo = _clp_clamped - torch.log1p(-torch.exp(_clp_clamped))
+            rlo = _rlp_clamped - torch.log1p(-torch.exp(_rlp_clamped))
             or_loss = -F.logsigmoid(clo - rlo).mean()
             loss = co.loss + self.beta * or_loss
             return (loss, co) if return_outputs else loss
@@ -3374,6 +3444,7 @@ def _(
     make_compute_metrics,
     model,
     os,
+    patch_neftune_compatibility,
     processor,
     sft_done,
     sft_resume,
@@ -3493,6 +3564,8 @@ def _(
             output_dir=joint_sft_output_dir,
             base_model=BASE_T5_MODEL,
         )
+
+        patch_neftune_compatibility(model)
 
         sft_collator = Seq2SeqVisionCollator(processor, MAX_SOURCE_LENGTH, MAX_TARGET_LENGTH, vision_train_dataset)
 
@@ -3885,6 +3958,8 @@ def _(
     orpo_eval_text,
     orpo_resume,
     os,
+    patch_neftune_compatibility,
+    cast_model_to_bfloat16,
     processor,
     raw_orpo_dataset,
     torch,
@@ -3896,6 +3971,8 @@ def _(
             f"⏭️ [JOINT-ORPO] Dilewati — RUN_ORPO={RUN_ORPO}, orpo_done={orpo_done}, model={'OK' if model is not None else 'None'}."
         )
     if _should_run:
+        patch_neftune_compatibility(model)
+        cast_model_to_bfloat16(model)
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -4145,9 +4222,11 @@ def _(
     JOINT_PREFIX,
     LOAD_IN_4BIT,
     OUTPUT_DIR,
+    RUN_ORPO,
     UNIFIED_HF_REPO,
     final_done,
     model,
+    orpo_done,
     os,
     processor,
     tokenizer,
@@ -4161,6 +4240,13 @@ def _(
             "❌ [MERGE] HF_TOKEN kosong — isi widget login & jalankan cell auth dulu. "
             "Merge menulis ke HF; 401 akan memukul di akhir (fail-fast di sini)."
         )
+
+    if RUN_ORPO and not orpo_done:
+        raise RuntimeError(
+            "❌ [MERGE] RUN_ORPO=True tetapi ORPO belum selesai (atau mengalami error)! "
+            "Merge dihentikan untuk mencegah pemodelan final berbasis adapter yang belum selesai."
+        )
+
     _api = _MergeApi(token=_token)
     _files = _api.list_repo_files(UNIFIED_HF_REPO)
 
@@ -4302,9 +4388,23 @@ def _(
         merged_bf16_path = os.path.join(final_upload_dir, "merged_bf16")
         quantized_4bit_path = os.path.join(final_upload_dir, "quantized_4bit")
 
-        # Normalisasi dtype: tensor fp32 sisa (modules_to_save/lm_head/buffer) wajib
+        # Normalisasi dtype: tensor fp32 sisa (modules_to_save/lm_head/projector/buffer) wajib
         # di-cast ke bf16 — jalur merge Unsloth memukul "expected BFloat16, found Float".
         _n_cast = 0
+        try:
+            _model_to_merge = _model_to_merge.to(torch.bfloat16)
+        except Exception:
+            pass
+
+        for _mod_m in _model_to_merge.modules():
+            if hasattr(_mod_m, "weight") and isinstance(getattr(_mod_m, "weight", None), torch.Tensor):
+                if _mod_m.weight.dtype == torch.float32:
+                    _mod_m.weight.data = _mod_m.weight.data.to(torch.bfloat16)
+                    _n_cast += 1
+            if hasattr(_mod_m, "bias") and isinstance(getattr(_mod_m, "bias", None), torch.Tensor):
+                if _mod_m.bias.dtype == torch.float32:
+                    _mod_m.bias.data = _mod_m.bias.data.to(torch.bfloat16)
+                    _n_cast += 1
         for _nm_p, _p_m in _model_to_merge.named_parameters():
             if _p_m.dtype == torch.float32:
                 _p_m.data = _p_m.data.to(torch.bfloat16)
@@ -4314,7 +4414,7 @@ def _(
                 _b_m.data = _b_m.data.to(torch.bfloat16)
                 _n_cast += 1
         if _n_cast:
-            print(f"[MERGE] Cast {_n_cast} tensor fp32 → bf16")
+            print(f"[MERGE] Cast {_n_cast} tensor/modul fp32 → bf16")
 
         print("[MERGE] Merging LoRA adapter → BF16 (merged_16bit)...")
         _model_to_merge.save_pretrained_merged(merged_bf16_path, _merge_tokenizer, save_method="merged_16bit")
