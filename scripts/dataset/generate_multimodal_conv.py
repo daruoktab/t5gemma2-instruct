@@ -810,7 +810,7 @@ async def main():
                         model=worker_model
                     )
 
-                    final_output = cast(ConversationResult, result.output)
+                    final_output = result.output
 
                     # Di titik ini, `validate_final_output` (output_validator) SUDAH menjamin:
                     # target_turns tercapai, tidak ada masalah prefix, tidak ada indikasi

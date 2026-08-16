@@ -1,8 +1,11 @@
 """
-Generate Synthetic Conversational Dataset "EXTRA" — v2 (2026-08-02)
-====================================================================
-Pipeline STANDALONE (API StepFun via pydantic-ai) — fitur PERSIS dengan
-MCPB `generate-conv-indonesia` (v2.1.18), tapi dijalankan sendiri tanpa Claude.
+Generate Synthetic Conversational Dataset via API — StepFun (pydantic-ai)
+=============================================================================
+Versi API-BASED (butuh API key LLM: STEPFUN_API_KEY / API_KEY /
+OPENROUTER_API_KEY + base URL OpenAI-compatible). Untuk versi AGENT (tanpa
+API key): Claude Desktop (MCPB) & Antigravity/Gemini CLI (MCP) pakai
+mcpb/generate-conv-indonesia (server.py) — jangan jalankan file ini di sana.
+Fitur diselaraskan dengan MCPB v2.1.18, tapi dijalankan sendiri tanpa Claude.
 
 Yang dipertahankan & diselaraskan dengan MCPB:
   - RANDOM-ACCESS datasets-server: 1 HTTP call per row, TANPA unduh dataset penuh
@@ -32,12 +35,12 @@ Arsitektur pydantic-ai:
     run; bila gagal, prompt di-append catatan error & diulang (maks 2x).
 
 Penggunaan:
-  python scripts/dataset/generate_conv_extra_20260802.py --mode text --target 2000 --model step-3.7-flash
-  python scripts/dataset/generate_conv_extra_20260802.py --mode vision --target 1000 --model step-3.7-flash
-  python scripts/dataset/generate_conv_extra_20260802.py --text-target 2000 --vision-target 1000 --model step-3.7-flash
-  python scripts/dataset/generate_conv_extra_20260802.py --quick --text-target 2 --vision-target 2   # uji cepat
-  python scripts/dataset/generate_conv_extra_20260802.py --limit 2 --exclude-file data/synthetic/run_lain.jsonl
-  python scripts/dataset/generate_conv_extra_20260802.py --overwrite --text-target 2000 --vision-target 1000
+  python scripts/dataset/generate_conv_api.py --mode text --target 2000 --model step-3.7-flash
+  python scripts/dataset/generate_conv_api.py --mode vision --target 1000 --model step-3.7-flash
+  python scripts/dataset/generate_conv_api.py --text-target 2000 --vision-target 1000 --model step-3.7-flash
+  python scripts/dataset/generate_conv_api.py --quick --text-target 2 --vision-target 2   # uji cepat
+  python scripts/dataset/generate_conv_api.py --limit 2 --exclude-file data/synthetic/run_lain.jsonl
+  python scripts/dataset/generate_conv_api.py --overwrite --text-target 2000 --vision-target 1000
 
 Konfigurasi default (batas API):
   --model step-3.7-flash | --concurrency 5 | --rpm 10 | --tpm 5000000
@@ -101,7 +104,7 @@ VALID_PREFIXES = Literal[
 _PREFIX_LABEL = {"<unused1>": "SUMMARIZE", "<unused2>": "TRANSLATE", "<unused3>": "NER",
                  "<unused4>": "QA", "<unused5>": "PARAPHRASE", "<unused6>": "GENERAL_CHAT"}
 
-DEFAULT_OUTPUT = DATA_DIR / "synthetic" / "generated_conv_extra_20260802.jsonl"
+DEFAULT_OUTPUT = DATA_DIR / "synthetic" / "generated_conv_api.jsonl"
 DS_API = "https://datasets-server.huggingface.co"
 
 
@@ -148,20 +151,33 @@ class ConversationOutput(BaseModel):
                     )
             else:
                 # Normalisasi: strip spasi per elemen, buang duplikat (pertahankan urutan).
-                if not m.prefixes:
-                    m.prefixes = ["<unused4>"]
-                else:
-                    cleaned = []
-                    for p in m.prefixes:
-                        p = re.sub(r"\s+", "", str(p))
-                        if p and p not in cleaned:
-                            cleaned.append(p)
-                    m.prefixes = cast(List[VALID_PREFIXES], cleaned) if cleaned else ["<unused4>"]
+                # TIDAK ADA fallback — prefix kosong = ERROR (pydantic-ai retries memberi tahu model).
+                cleaned = []
+                for p in m.prefixes:
+                    p = re.sub(r"\s+", "", str(p))
+                    if p and p not in cleaned:
+                        cleaned.append(p)
+                if not cleaned:
+                    raise ValueError(
+                        f"Turn assistant [{i}] WAJIB punya minimal 1 token prefix "
+                        f"<unused1..6> (ditemukan kosong). Tulis token sesuai task pesan."
+                    )
+                m.prefixes = cast(List[VALID_PREFIXES], cleaned)
                 if len(m.prefixes) > 3:
                     raise ValueError(
                         f"Prefix turn assistant [{i}] maksimal 3 token UNIK (ditemukan "
                         f"{len(m.prefixes)}: {m.prefixes}). Batasi hingga 3 task per pesan."
                     )
+        # WAJIB minimal 1 turn assistant multi-prefix (2-3 token) — semakin banyak semakin bagus.
+        multi = [i for i, m in enumerate(convs)
+                 if m.role == "assistant" and len(set(m.prefixes)) >= 2]
+        if not multi:
+            raise ValueError(
+                "WAJIB minimal 1 turn assistant memakai 2-3 prefix (multi-task, mis. "
+                "['<unused1>', '<unused4>'] untuk rangkum + jawab, atau "
+                "['<unused4>', '<unused6>'] untuk jawab + basa-basi). Semakin banyak turn "
+                "multi-prefix dalam satu percakapan semakin bagus — minimal 1 turn wajib."
+            )
         return convs
 
 
@@ -465,7 +481,7 @@ _OFFSETS_CACHE: Dict[str, List[Tuple[int, str]]] = {}
 
 
 def _ds_retry(path_query: str, attempts: int = 3, base_delay: float = 2.5) -> Dict[str, Any]:
-    headers = {"User-Agent": "generate-conv-extra-20260802"}
+    headers = {"User-Agent": "generate-conv-api"}
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -554,7 +570,7 @@ def _csv_dataset(spec: Dict[str, Any]) -> Any:
     path = cache_dir / "IndoMMLU.csv"
     if not path.exists():
         print(f"⬇️ Mengunduh CSV asli {spec['dataset']} → {path}", file=sys.stderr)
-        req = urllib.request.Request(spec["csv_url"], headers={"User-Agent": "generate-conv-extra-20260802"})
+        req = urllib.request.Request(spec["csv_url"], headers={"User-Agent": "generate-conv-api"})
         with urllib.request.urlopen(req, timeout=120) as resp, open(path, "wb") as f:
             f.write(resp.read())
     ds = datasets.load_dataset("csv", data_files=str(path), split="train")
@@ -886,14 +902,14 @@ Konteks / Baris Dataset Asli dari HuggingFace:
 CARA KERJA (kerjakan URUTAN ini SEBELUM menulis output):
 1. BACA & PAHAMI teks mentah asli di atas. Identifikasi 2-3 FAKTA KUNCI yang menjadi dasar percakapan.
 2. SUSUN ALUR: turn user [1] membuka topik dari salah satu fakta kunci; turn user berikutnya adalah follow-up yang NATURAL menyambung jawaban sebelumnya (klarifikasi, minta contoh, gali aspek lain); turn terakhir mengeksplorasi aspek lain dari konteks yang sama atau penutup ringan. JANGAN menanyakan hal yang sama berulang dengan kata-kata berbeda.
-3. REASONING PREFIX (untuk SETIAP turn assistant): (a) baca pertanyaan user, (b) tentukan TASK dominan jawaban yang akan ditulis, (c) pilih 1-3 token yang TEPAT. Pemetaan: meringkas teks → <unused1> SUMMARIZE; menerjemahkan → <unused2> TRANSLATE; mengekstrak entitas/identitas → <unused3> NER; menjawab pertanyaan → <unused4> QA; memparafrase → <unused5> PARAPHRASE; basa-basi/obrolan umum → <unused6> GENERAL_CHAT. Task berbeda antar turn → prefix WAJIB berbeda; task sama boleh sama.
+3. REASONING PREFIX (untuk SETIAP turn assistant): (a) baca pertanyaan user, (b) tentukan TASK dominan jawaban yang akan ditulis, (c) pilih 1-3 token yang TEPAT. Pemetaan: meringkas teks → <unused1> SUMMARIZE; menerjemahkan → <unused2> TRANSLATE; mengekstrak entitas/identitas → <unused3> NER; menjawab pertanyaan → <unused4> QA; memparafrase → <unused5> PARAPHRASE; basa-basi/obrolan umum → <unused6> GENERAL_CHAT. Task berbeda antar turn → prefix WAJIB berbeda; task sama boleh sama. Multi-task (2-3 task dalam satu jawaban) SANGAT dianjurkan — mis. ['<unused1>', '<unused4>'] untuk rangkum + jawab, atau ['<unused4>', '<unused6>'] untuk jawab + penutup.
 4. PERIKSA ULANG sebelum menyerahkan: setiap turn assistant BENAR-BENAR menjawab pertanyaan user (bukan jawaban lepas), semua klaim konsisten dengan fakta kunci, dan TIDAK ADA kalimat/frasa yang diulang persis di turn lain.
 
 ATURAN WAJIB:
 1. JUMLAH PESAN: TEPAT {total_msgs} pesan ({num_pairs} pasang user-assistant, selang-seling). Validator MENOLAK bila bukan 6/8/10 pesan.
 2. KEDALAMAN JAWABAN: setiap turn assistant MINIMAL {min_len} karakter dan berisi ELABORASI yang benar-benar menjawab pertanyaan: berikan alasan, langkah, contoh, atau analogi. JANGAN sekadar mengulang kunci jawaban/teks mentah, JANGAN jawaban satu kalimat, dan JANGAN mengulang kalimat yang sama persis (atau hampir persis) di turn lain.
 3. VARIASI PEMBUKA: jangan memulai setiap jawaban assistant dengan kata/frasa yang sama berulang (mis. 'Benar,', 'Tentu,', 'Ya,', 'Berdasarkan konteks,') — variasikan struktur kalimat pembuka.
-4. `prefixes` (role assistant): 1-3 token UNIK (tanpa spasi/duplikat) hasil REASONING langkah 3. Khusus role user: prefixes wajib [].
+4. `prefixes` (role assistant): 1-3 token UNIK (tanpa spasi/duplikat) hasil REASONING langkah 3. MULTI-PREFIX WAJIB: minimal 1 turn assistant memakai 2-3 prefix; SEMAKIN BANYAK turn multi-prefix dalam satu percakapan semakin bagus (prioritas tinggi — gunakan di 2-3 turn bila natural, turun ke 1 turn kalau memaksakan membuat percakapan aneh). Khusus role user: prefixes wajib [].
 5. DILARANG menulis token <unusedX> atau kata nama task (SUMMARIZE/NER/dll) di dalam konten.
 6. GROUNDING: seluruh turn konsisten dengan 2-3 FAKTA KUNCI dari teks mentah asli — JANGAN menambah fakta di luar konteks. Bila konteks tidak memuat informasi yang ditanyakan, jawab dengan menyebut keterbatasan konteks secara wajar (jangan mengarang).
 7. GAYA TURN USER (PENTING): turn user ditulis seperti MANUSIA biasa yang bertanya — variasi tipe pertanyaan (open-ended, klarifikasi, minta contoh, pengecekan ulang), variasi panjang kalimat, bahasa sehari-hari natural, jangan memulai semua turn dengan pola sama ("Halo"/"Tolong"/"Bisakah kamu"), jangan menulis dari sudut pandang AI di turn user, dan pertanyaan follow-up nyambung natural dari jawaban sebelumnya.
@@ -920,12 +936,10 @@ def _format_final(validated: ConversationOutput, is_vision: bool) -> List[Dict[s
                 content_clean = "📷\n" + content_clean
             formatted.append({"role": "user", "content": content_clean})
         else:
-            tokens = re.findall(r"<unused[1-6]>", "".join(msg.prefixes))
-            seen: List[str] = []
-            for t in tokens:
-                if t not in seen:
-                    seen.append(t)
-            prefix_str = "".join(seen) if seen else "<unused4>"
+            # Prefix sudah dijamin 1-3 token unik oleh validator; TIDAK ADA fallback.
+            prefix_str = "".join(dict.fromkeys(msg.prefixes))
+            if not prefix_str:
+                raise ValueError("Prefix assistant kosong — seharusnya sudah ditolak validator.")
             formatted.append({"role": "assistant", "content": f"{prefix_str} {content_clean}".strip()})
     return formatted
 
@@ -936,7 +950,7 @@ def _download_vision_image(image_ref: str, fname_base: str) -> str:
         VISION_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
         path = VISION_IMAGE_DIR / f"{fname_base}.jpg"
         if not path.exists() and image_ref.startswith(("http://", "https://")):
-            req = urllib.request.Request(image_ref, headers={"User-Agent": "generate-conv-extra-20260802"})
+            req = urllib.request.Request(image_ref, headers={"User-Agent": "generate-conv-api"})
             with urllib.request.urlopen(req, timeout=60) as resp:
                 PILImage.open(io.BytesIO(resp.read())).convert("RGB").save(path, "JPEG", quality=90)
         if path.exists():
@@ -1009,6 +1023,7 @@ CHECKLIST (periksa SATU PER SATU, bandingkan DENGAN KONTEKS di atas):
 6. TIDAK ada kebocoran kata nama task (SUMMARIZE/TRANSLATE/NER/QA/PARAPHRASE/GENERAL_CHAT) atau token <unusedX> di dalam konten.
 7. Struktur: turn selang-seling user/assistant, turn pertama user{', user pertama diawali 📷' if is_vision else ''}, jumlah pesan TEPAT {total_msgs}.
 8. Bahasa Indonesia natural dan sesuai Instruksi Tuning.
+9. MULTI-PREFIX: minimal 1 turn assistant memakai 2-3 prefix — bila tidak ada satupun turn multi-prefix, laporkan sebagai error (semakin banyak turn multi-prefix yang natural semakin bagus).
 
 Aturan laporan:
 - Untuk setiap masalah: beri turn_index (0-based; -1 untuk masalah global), severity (error/warning), problem, suggestion.
@@ -1220,6 +1235,8 @@ def main() -> None:
             "Kamu adalah generator percakapan sintetis terstruktur yang mematuhi skema Pydantic. "
             "Sebelum menulis setiap turn assistant, lakukan REASONING task untuk memilih prefix <unused1..6> "
             "yang TEPAT (SUMMARIZE/TRANSLATE/NER/QA/PARAPHRASE/GENERAL_CHAT) dan variasikan bila task berbeda. "
+            "WAJIB minimal 1 turn assistant memakai 2-3 prefix (multi-task); semakin banyak turn multi-prefix "
+            "yang natural dalam satu percakapan semakin bagus. "
             "Tulis turn USER seperti manusia biasa yang bertanya (variasi gaya & tipe pertanyaan, bukan robot/AI, "
             "bukan sudut pandang asisten) dan turn ASSISTANT sesuai persona Gemma dengan elaborasi "
             "(alasan/langkah/contoh/analogi), tanpa mengulang kalimat antar turn. "

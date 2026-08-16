@@ -120,11 +120,17 @@ async def main():
         r = await srv.call("tools/call", {"name": "get_progress", "arguments": {}})
         prog0 = json.loads(r["result"]["content"][0]["text"])
         print("get_progress awal ->", shorten(prog0))
+        assert "prefix_stats" in prog0 and "prefix_hint" in prog0, "prefix_stats/hint harus ada"
+        assert prog0["prefix_stats"] == {"<unused1>": 0, "<unused2>": 0, "<unused3>": 0, "<unused4>": 0, "<unused5>": 0, "<unused6>": 0}
+        assert "pairs_stats" in prog0 and "pairs_hint" in prog0, "pairs_stats/hint harus ada"
+        assert prog0["pairs_stats"] == {"3": 0, "4": 0, "5": 0}
 
         # 0b) sample_row AUTO (tanpa category) — harus text (karena rasio text paling tertinggal)
         r = await srv.call("tools/call", {"name": "sample_row", "arguments": {}})
         auto = json.loads(r["result"]["content"][0]["text"])
         print("sample AUTO ->", auto["category"], "| auto_category:", auto.get("auto_category"), "|", auto["source"])
+        assert "prefix_hint" in auto and "prefix_stats" in auto, "sample_row harus punya prefix hint/stats"
+        assert "pairs_hint" in auto and "pairs_stats" in auto, "sample_row harus punya pairs hint/stats"
 
         # 1) rows access (text) — seed tetap
         r = await srv.call("tools/call", {"name": "sample_row",
@@ -166,27 +172,35 @@ async def main():
         print("sample CVQA ->", cvqa["source"], "| image_available:", cvqa["image_available"],
               "| note:", cvqa["note"], "| ctx:", shorten(cvqa["raw_context"], 150))
 
-        # 6) simpan percakapan (source PERSIS dari sample_row — untuk exclude)
+        # 6) simpan percakapan (source PERSIS dari sample_row — untuk exclude); 3 pasang = 6 pesan (aturan strict)
         conv = json.dumps([
-            {"role": "user", "content": "Apa itu fotosintesis?", "prefixes": []},
-            {"role": "assistant", "content": "Fotosintesis adalah proses tumbuhan mengubah cahaya menjadi energi.",
-             "prefixes": ["<unused4>"]},
+            {"role": "user", "content": "Apa itu fotosintesis dan mengapa penting bagi tumbuhan?", "prefixes": []},
+            {"role": "assistant", "content": "Fotosintesis adalah proses tumbuhan mengubah cahaya matahari menjadi energi kimia. Proses ini penting karena menjadi sumber makanan utama bagi tumbuhan sekaligus penghasil oksigen yang kita hirup setiap hari.", "prefixes": ["<unused4>"]},
+            {"role": "user", "content": "Kalau begitu, bagian tumbuhan mana yang berperan paling besar dalam proses ini?", "prefixes": []},
+            {"role": "assistant", "content": "Daun adalah bagian yang paling berperan karena mengandung klorofil, pigmen hijau yang menangkap energi cahaya. Klorofil inilah yang membuat fotosintesis bisa berlangsung secara efisien di siang hari.", "prefixes": ["<unused4>", "<unused1>"]},
+            {"role": "user", "content": "Apakah ada faktor lingkungan yang bisa mengganggu proses fotosintesis?", "prefixes": []},
+            {"role": "assistant", "content": "Ada beberapa faktor, seperti kekurangan air, suhu yang terlalu panas atau dingin, serta minimnya cahaya matahari. Ketiganya bisa menurunkan laju fotosintesis sehingga pertumbuhan tumbuhan ikut terhambat.", "prefixes": ["<unused4>"]},
         ])
         r = await srv.call("tools/call", {"name": "save_conversation", "arguments": {
-            "source": row1["source"], "category": "text_nlu_chat", "conversation_json": conv}})
+            "source": row1["source"], "category": "text_nlu_chat",
+            "conversation_json": conv, "num_pairs": "3"}})
         print("save_conversation ->", r["result"]["content"][0]["text"])
 
         # 7) stats
-        out = os.path.join(tmp, "generated_conv_claude.jsonl")
+        out = os.path.join(tmp, "generated_conv_agent.jsonl")
         r = await srv.call("tools/call", {"name": "get_output_stats", "arguments": {"output_path": out}})
         print("get_output_stats ->", shorten(r["result"]["content"][0]["text"]))
 
-        # 7b) get_progress setelah 1 text disimpan → text.done=1, next harus vision
+        # 7b) get_progress setelah 1 text disimpan → text.done=1, next harus vision, prefix_stats terisi
         r = await srv.call("tools/call", {"name": "get_progress", "arguments": {}})
         prog1 = json.loads(r["result"]["content"][0]["text"])
         print("get_progress setelah save -> text:", prog1["text"], "| vision:", prog1["vision"],
-              "| next:", prog1["next_category"], "| next_src:", prog1["next_source_key"])
+              "| next:", prog1["next_category"], "| next_src:", prog1["next_source_key"],
+              "| prefix_stats:", prog1["prefix_stats"], "| hint:", shorten(prog1["prefix_hint"], 80),
+              "| pairs_stats:", prog1["pairs_stats"], "| pairs_hint:", shorten(prog1["pairs_hint"], 80))
         assert prog1["text"]["done"] == 1 and prog1["next_category"] == "vision", "kuota/next salah"
+        assert sum(prog1["prefix_stats"].values()) >= 1, "prefix_stats harus terisi setelah save"
+        assert prog1["pairs_stats"].get("3", 0) == 1, "pairs_stats harus terisi setelah save (num_pairs=3)"
 
         # 8) exclusion: seed sama 7 → offset pertama pasti row yg sama → harus diskip
         r = await srv.call("tools/call", {"name": "sample_row",

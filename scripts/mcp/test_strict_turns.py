@@ -9,12 +9,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_mcpb_stdio import BUNDLE_SRC, CMD, MCPServer, drain_stderr  # noqa: E402
 
 
-def conv(n_pairs: int, short_len: int = 0, multi_prefixes=None, user_with_prefix: bool = False) -> str:
+def conv(n_pairs: int, short_len: int = 0, multi_prefixes=None, user_with_prefix: bool = False, all_single: bool = False) -> str:
     turns = []
     for i in range(n_pairs):
         user_pfx = ["<unused4>"] if (user_with_prefix and i == 0) else []
         turns.append({"role": "user", "content": f"Pertanyaan nomor {i} tentang topik yang dibahas dalam konteks.", "prefixes": user_pfx})
-        pfx = multi_prefixes or ["<unused4>"]
+        if all_single:
+            pfx = ["<unused4>"]
+        else:
+            pfx = multi_prefixes or (["<unused4>", "<unused6>"] if i == 0 else ["<unused4>"])
         if short_len and i == 0:
             turns.append({"role": "assistant", "content": "x" * short_len, "prefixes": pfx})
         else:
@@ -61,6 +64,7 @@ async def main():
         ("assistant 4 token unik → DITOLAK (max 3)", conv(3, multi_prefixes=["<unused1>", "<unused2>", "<unused3>", "<unused4>"]), "3", "text_nlu_chat", True),
         ("assistant 3 token unik → LOLOS (≤3)", conv(3, multi_prefixes=["<unused1>", "<unused2>", "<unused3>"]), "3", "text_nlu_chat", False),
         ("user turn ber-prefix → DITOLAK", conv(3, user_with_prefix=True), "3", "text_nlu_chat", True),
+        ("tanpa turn multi-prefix (semua 1 token) → DITOLAK", conv(3, all_single=True), "3", "text_nlu_chat", True),
     ]
     for label, content, np_, cat, expect in cases:
         err, text = await save(srv, 0, np_, cat, 0, content)
@@ -77,14 +81,14 @@ async def main():
         {"role": "user", "content": "Kalau begitu, bagaimana contoh penerapannya dalam kehidupan sehari-hari?", "prefixes": []},
         {"role": "assistant", "content": "Contoh penerapannya adalah ketika kita mengamati fenomena yang dijelaskan di konteks, "
                                          "kita bisa melihat dampaknya secara langsung dan mengevaluasi langkah berikutnya "
-                                         "dengan lebih terstruktur dan sistematis sesuai penjelasan tadi.", "prefixes": ["<unused4>"]},
+                                         "dengan lebih terstruktur dan sistematis sesuai penjelasan tadi.", "prefixes": ["<unused4>", "<unused6>"]},
         {"role": "user", "content": "Apakah ada batasan atau kekurangan dari pendekatan itu?", "prefixes": []},
         {"role": "assistant", "content": "Batasan utamanya adalah pendekatan ini sangat bergantung pada kualitas data awal dan asumsi yang dipakai, "
                                          "sehingga hasilnya tetap perlu diverifikasi oleh ahli sebelum dijadikan keputusan akhir.", "prefixes": ["<unused4>"]},
     ])
     err, text = await save(srv, 3, "3", "text_nlu_chat", 0, content_leak)
     print(f"token bocor tengah: isError={err} | msg: {text[:120]}")
-    out = os.path.join(tmp, "generated_conv_claude.jsonl")
+    out = os.path.join(tmp, "generated_conv_agent.jsonl")
     raw = open(out, encoding="utf-8").read()
     # Ambil konten assistant di baris terakhir (yang mengandung 'Penjelasan yang cukup panjang')
     last = [l for l in raw.strip().splitlines() if "Penjelasan yang cukup panjang" in l][-1]
