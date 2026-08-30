@@ -34,12 +34,13 @@ docs/
     ├── 📄 2026-08-06_v8_deepdive_04_architecture_retrieval_multimodal.md
     ├── 📄 2026-08-06_v8_deepdive_05_objectives_data_domain_adaptation.md
     ├── 📄 2026-08-06_v8_deepdive_06_memory_context_speculative_decoding.md
-    └── 📄 2026-08-06_v8_deepdive_07_foundational_and_external_papers.md
+    ├── 📄 2026-08-06_v8_deepdive_07_foundational_and_external_papers.md
+    └── 📄 2026-08-16_v8_deepdive_08_cross_papers_ideas_extraction.md
 ```
 
 ---
 
-## 📚 Daftar Dokumen Deep Dive Teknis V8 (01 s.d. 07)
+## 📚 Daftar Dokumen Deep Dive Teknis V8 (01 s.d. 08)
 
 ### 1. [Deep-Dive 01 — Token-Level Policy Optimization & Alignment Mechanisms](file:///d:/Codings/unsloth-porto/t5-gemma-2/instruct/docs/sessions/papers_deep_dive/2026-08-06_v8_deepdive_01_tlpo_alignment.md)
 - **TLPO** (2604.26553): Token-Level Policy Optimization (Samsung SDS) untuk mencegah *language confusion*.
@@ -88,3 +89,11 @@ docs/
 - **2212.04089** (Task Arithmetic 2023) & **2502.20186** (Layer-Aware Task Arithmetic).
 - **2503.02656** (Gemma Encoder) & **2504.06225** (Encoder-Decoder Gemma).
 - **2505.12021** (Cross-Model Transfer) & **2511.16147** (TS-PEFT) & **2602.01227** (Token Priority).
+
+### 8. [Deep-Dive 08 — Cross-Papers Ideas Extraction (CSV & Foundation)](file:///d:/Codings/unsloth-porto/t5-gemma-2/instruct/docs/sessions/papers_deep_dive/2026-08-16_v8_deepdive_08_cross_papers_ideas_extraction.md)
+- **Cross-Architecture Distillation** (Microsoft `2501.16273` & Google `2504.06225`): Teacher Decoder $\to$ Student Seq2Seq KD.
+- **GRUN Unlearning Framework** (`2502.17823`): Gated Representation Tuning & Soft-Gate Guard.
+- **Layer-Aware Task Arithmetic** (`2502.20186`): Layer-wise rank & logarithmic scaling.
+- **Cross-Model Task Vector Transfer** (`2505.12021`): Orthogonal alignment matrix ($U^T \Delta W U$).
+- **Gemma Encoder Downstream Tuning** (`2503.02656`): Bidirectional masking & dropout 0.1.
+

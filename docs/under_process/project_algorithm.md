@@ -1,91 +1,115 @@
-# Algoritma & Pipeline Proyek: T5Gemma-2-Instruct (Assistant-Driven Prefix)
+# Algoritma & Pipeline Proyek: T5Gemma-2-Instruct (V8 Joint Multimodal Blueprint)
 
-Dokumen ini memetakan alur logika (algoritma) dari hulu ke hilir proyek *fine-tuning* model *encoder-decoder* T5Gemma-2 untuk percakapan *multi-turn* bahasa Indonesia.
+Dokumen ini memetakan alur logika (algoritma) dari hulu ke hilir proyek *fine-tuning* model *encoder-decoder* T5Gemma-2 untuk percakapan *multi-turn* bahasa Indonesia dan multimodal vision (Pipeline V8).
 
-## 🌊 Diagram Alir Utama (Mermaid)
+## 🌊 Diagram Alir Utama Pipeline V8 (Mermaid)
 
 ```mermaid
 graph TD
-    %% Dataset Pipeline
-    subgraph Fase_1 ["Fase 1: Pembuatan Dataset Agentic"]
-        A1["Topik Mentah"] -->|LLM Agent + Pydantic| A2("Generate Multi-Turn Chat")
-        A2 -->|Validasi Enum| A3{"Deteksi Intent User"}
-        A3 -->|Tugas Ekstraksi| A4["Inject unused1 dsb."]
-        A3 -->|Tanya Jawab| A5["Inject unused2 dsb."]
-        A3 -->|Chat Biasa| A6["Inject unused6"]
-        A4 --> A7(("Dataset SFT Akhir"))
-        A5 --> A7
-        A6 --> A7
-        A8["IndoQA & Longform"] -->|Augmentasi| A7
+    %% Phase 0.5: Steering
+    subgraph Fase_0_5 ["Fase 0.5: SVD-Purified Task Vector Steering (DeVec)"]
+        A1["google/gemma-3-4b-it"] --- A2["google/gemma-3-4b-pt"]
+        A1 -- Minus --> A3["Δ_raw = W_IT - W_Base"]
+        A3 -->|SVD Eigendecomposition tau=0.85| A4["Δ_purified (DeVec)"]
+        A4 -->|Layer-Wise Ramp-Up Alpha| A5["Suntikkan ke Decoder FFN & Norms"]
+        A6["google/t5gemma-2-4b-4b"] --> A5
+        A5 -->|Attention Q/K/V/O = 0.0| A7[("Checkpoint steered/")]
     end
 
-    %% Tokenizer & Model Prep
-    subgraph Fase_2 ["Fase 2: Modifikasi Arsitektur"]
-        B1["Load Base Model T5Gemma-2"] --> B2["Konfigurasi Tokenizer"]
-        B2 --> B3{"Logit Masking / Suppression"}
-        B3 -->|Kecualikan ID 7-12| B4("Biarkan Task Prefixes Aktif")
-        B3 -->|Masking ID lainnya| B5("Suppress Unused & Vision Tokens")
+    %% Phase 1.5: Vision Grafting
+    subgraph Fase_1_5 ["Fase 1.5: Precision Vision Grafting"]
+        A7 --> B1["Target Decoder-Steered"]
+        B2["google/gemma-3-4b-it"] -->|Ekstrak SigLIP 400M + Projector| B3["Transplantasi Bobot"]
+        B1 --> B3
+        B3 -->|Cast FP32 to BF16| B4[("Checkpoint cangkok/ (Base Model)")]
     end
 
-    %% Training Pipeline
-    subgraph Fase_3 ["Fase 3: Pelatihan Model"]
-        A7 --> C1["Supervised Fine-Tuning"]
-        B4 --> C1
-        B5 --> C1
-        C1 -->|LoRA / Unsloth| C2("Model SFT")
-        C3["Dataset DPO/Preference"] --> C4["Alignment: DPO/ORPO"]
-        C2 --> C4
-        C4 --> C5(("Model Akhir"))
+    %% Dataset & MTO Formatting
+    subgraph Fase_Data ["Fase Data: Multi-Task MTO Formatting"]
+        D1["chat_sft + indoqa_sft"] --> D2["MTO Task Prefix Routing"]
+        D3["vision_sft (SigLIP Formatted)"] --> D4["Unroll 📷 to 256 Soft Tokens"]
+        D2 --> D5["Joint Co-Training Pool (100%)"]
+        D4 --> D5
+        D5 -->|5% Split Hold-out| D6["Eval Set (Multimodal + Text)"]
+        D5 -->|95% Split| D7["Train Set Joint SFT"]
     end
 
-    %% Inference
-    subgraph Fase_4 ["Fase 4: Inference (Penggunaan)"]
-        D1("User: Input Natural") -->|Masuk ke Encoder| D2["Context Routing"]
-        D2 -->|Masuk ke Decoder| D3{"Model Memilih Task Prefix"}
-        D3 -->|unused1 Terpilih| D4("Mode: Summarize")
-        D3 -->|unused3 Terpilih| D5("Mode: Translate")
-        D4 --> D6["Output Jawaban Sesuai Mode"]
-        D5 --> D6
+    %% Phase 1: Joint SFT
+    subgraph Fase_1 ["Fase 1: Joint Multimodal SFT"]
+        B4 --> C1["Unsloth FastVisionModel (4-bit)"]
+        D7 --> C2["Joint SFT Trainer"]
+        C1 --> C2
+        C3["Optimizer: GrokFast + OrScaleLM"] --> C2
+        C4["Selective Label Smoother (eps=0.1)"] --> C2
+        C5["Logit Mask on ALL_SUPPRESS_IDS"] --> C2
+        C2 -->|Save Adapter| C6[("joint/sft/final_adapter")]
+    end
+
+    %% Phase 2: Joint ORPO + TLPO
+    subgraph Fase_2 ["Fase 2: Preference Alignment (ORPO + TLPO)"]
+        C6 --> E1["Load SFT Adapter"]
+        E2["Dataset: chat_orpo + vision_orpo"] --> E3["Split Forward Trainer"]
+        E1 --> E3
+        E4["Loss: CE + beta*OR + lambda*TLPO"] --> E3
+        E5["Label Smoothing = 0.0 (Mandatory)"] --> E3
+        E3 -->|Save Adapter| E6[("joint/orpo/final_adapter")]
+    end
+
+    %% Phase 3: Single Merge & Export
+    subgraph Fase_3 ["Fase 3: Unified Single Merge"]
+        B4 --> F1["Base Model (cangkok)"]
+        E6 --> F1
+        F1 -->|1x LoRA Merge BF16| F2[("final/merged_bf16")]
+        F1 -->|1x LoRA Merge 4-bit| F3[("final/quantized_4bit")]
     end
 ```
 
 ---
 
-## 📝 Penjelasan Langkah Algoritma (Step-by-Step)
+## 📝 Penjelasan Langkah Algoritma (Step-by-Step V8)
 
-### 1. Algoritma Pembuatan Dataset (*Data Generation*)
-*Tujuan: Membangun data latih di mana Asisten menggunakan Task Prefix.*
-1. **Input:** Daftar topik mentah.
-2. **Proses Agen:** Untuk setiap topik, inisialisasi *Agent Pydantic AI*.
-3. **Looping (Turn-by-turn):**
-   - Agen menghasilkan pesan User (bahasa natural).
-   - Agen mengklasifikasikan *intent* User ke dalam daftar `Enum` (Misal: `SUMMARIZE`, `TRANSLATE`).
-   - Agen menggabungkan token *prefix* (contoh: `<unused1>`) di **awal** teks balasan Asisten.
-4. **Validasi:** Cek apakah panjang percakapan memenuhi batas minimal (misal 10 *turns*).
-5. **Output:** File JSONL yang berisi percakapan bersarang (*nested chat*).
+### 1. Algoritma Task Vector Steering & DeVec Filtering (Phase 0.5)
+1. **Input:** Bobot `Gemma 3 IT`, `Gemma 3 Base`, dan `T5Gemma 2 Base`.
+2. **Delta Weight:** Hitung $\Delta = W_{\text{IT}} - W_{\text{Base}}$ untuk seluruh layer decoder.
+3. **SVD Purification (DeVec):** Lakukan dekomposisi nilai singular pada $\Delta$, proyeksikan ke *column space*, dan pisahkan *shared subspace* ($\tau=0.85$) untuk membuang noise interferensi parameter.
+4. **Layer-Wise Ramp-Up Injection:**
+   - Layer awal ($<25\%$): $\alpha_{\text{FFN}}=0.05, \alpha_{\text{Norm}}=0.02$ (subtle).
+   - Layer tengah ($25\%-80\%$): $\alpha_{\text{FFN}}=0.25, \alpha_{\text{Norm}}=0.08$ (peak reasoning).
+   - Layer akhir ($>80\%$): $\alpha_{\text{FFN}}=0.08, \alpha_{\text{Norm}}=0.03$ (output calibration).
+   - Attention ($Q, K, V, O$) dan $QK\text{-Norm}$ **wajib $\alpha=0.0$** (menjaga integritas Merged Attention $[X; H]$).
+5. **Output:** Simpan dan upload model terverifikasi ke subfolder `steered/`.
 
-### 2. Algoritma Modifikasi Tokenizer (*Logit Masking*)
-*Tujuan: Membersihkan arsitektur dari token sampah tanpa membunuh token Prefix.*
-1. Load daftar ID untuk *Unused Tokens* (Blok 1: ID 6-104, Blok 2: ID 256002-262143) dan *Vision Tokens*.
-2. Buat daftar pengecualian untuk ID 7 hingga 12 (mewakili `<unused1>` hingga `<unused6>`).
-3. Gabungkan sisa ID menjadi satu array besar (`ALL_SUPPRESS_IDS`).
-4. Saat *training/inference*, atur *logits* dari `ALL_SUPPRESS_IDS` menjadi `-infinity` agar model tidak pernah bisa memprediksi/mengeluarkan token tersebut.
+### 2. Algoritma Vision Tower Grafting (Phase 1.5)
+1. **Input:** Checkpoint `steered/` dan `google/gemma-3-4b-it`.
+2. **Transplantasi:** Salin parameter `model.vision_tower` (SigLIP 400M, 27 layers) dan `model.multi_modal_projector` dari donor ke target.
+3. **Precision Cast:** Konversikan seluruh bobot dan buffer float32 ke bfloat16 murni.
+4. **Verifikasi:** Pastikan perbedaan matriks bobot target vs donor $< 1\times 10^{-6}$.
+5. **Output:** Simpan dan upload base model training ke subfolder `cangkok/`.
 
-### 3. Algoritma Pelatihan (*Training Loop*)
-*Tujuan: Melatih model Encoder-Decoder untuk menguasai Prefix & Chat.*
-1. **SFT (Supervised Fine-Tuning):**
-   - **Encoder** menerima teks User secara murni.
-   - Melalui *Merged Cross-Attention*, **Decoder** dipaksa memprediksi *Task Prefix* sebagai token pertama.
-   - Hitung *Loss* hanya pada teks balasan Decoder. Lakukan *Backpropagation* via Unsloth LoRA.
-2. **Alignment (DPO/ORPO):**
-   - Bandingkan probabilitas log (*log prob*) dari jawaban *Chosen* melawan jawaban *Rejected* (cacat, halusinasi, dsb).
-   - Berikan penalti pada jawaban *Rejected* agar model menjauhi gaya bahasa tersebut.
+### 3. Algoritma Multi-Task Joint SFT Co-Training (Phase 1)
+1. **Input:** Base model `cangkok/`, dataset teks MTO (`chat_sft` + `indoqa_sft`), dan `vision_sft`.
+2. **Token & Logit Masking:**
+   - Terapkan forward hook pada `lm_head` untuk menekan `ALL_SUPPRESS_IDS` (penalti $-10000.0$).
+   - Pengecualian: Biarkan token `<unused1>` hingga `<unused6>` (ID 7–12) aktif untuk *Assistant-Driven Task Prefix*.
+3. **Optimizer OrScaleLM:**
+   - Terapkan filter gradien *GrokFast* ($\alpha=2.0, \lambda=0.98$).
+   - Matriks 2D LoRA diperbarui dengan *OrScaleLM* (Newton-Schulz 5-step + per-layer trust ratio scaling).
+   - Parameter 1D diperbarui dengan *AdEMAMix*.
+4. **Loss:** Gunakan `SelectiveLabelSmoother` ($\epsilon=0.1$) pada token yang valid.
+5. **Output:** Simpan dan upload adapter ke `joint/sft/final_adapter`.
 
-### 4. Algoritma Inferensi (*Assistant-Driven Routing*)
-*Tujuan: Bagaimana model berpikir saat dipakai oleh *end-user*.*
-1. Pengguna mengetik: `"Tolong terjemahkan dokumen ini..."`.
-2. Teks masuk ke **Encoder** tanpa tambahan apa pun.
-3. **Decoder** mulai bekerja. Berdasarkan representasi dari Encoder, Decoder menyimpulkan: *"Oh, ini tugas translasi"*.
-4. Decoder mengeluarkan token rahasia: `<unused2>`.
-5. Karena mengeluarkan `<unused2>`, *internal state* / *attention* dari model bergeser ke **Mode Translasi**.
-6. Decoder mengeluarkan teks terjemahannya hingga selesai.
+### 4. Algoritma Hybrid Alignment ORPO + TLPO (Phase 2)
+1. **Input:** Model dengan adapter SFT, dataset `chat_orpo`, dan `vision_orpo`.
+2. **Split Forward:** Jalankan forward encoder sekali, lalu forward decoder secara terpisah untuk *chosen* dan *rejected* (hemat 40% VRAM).
+3. **Hybrid Loss:**
+   $$\mathcal{L}_{\text{Total}} = \mathcal{L}_{\text{CE}}(\text{chosen}) + \beta \mathcal{L}_{\text{ORPO}} + \lambda_{\text{TLPO}} \mathcal{L}_{\text{TLPO}}$$
+4. **TLPO Regularizer:** Berikan penalti pada titik kebingungan bahasa (*language confusion point*) di mana model menghasilkan token non-Indonesia.
+5. **Constraint:** Label smoothing **wajib diset 0.0**.
+6. **Output:** Simpan dan upload adapter ke `joint/orpo/final_adapter`.
+
+### 5. Algoritma Unified Single Merge (Phase 3)
+1. **Input:** Base model `cangkok/` dan adapter `joint/orpo/final_adapter`.
+2. **Dtype Normalization:** Cast seluruh modul float32 ke bfloat16.
+3. **Merge 1x:** Lakukan penggabungan LoRA ke base model satu kali.
+4. **Export:** Ekspor bobot ke format BF16 (`final/merged_bf16`) dan format 4-bit NF4 (`final/quantized_4bit`).
+5. **Upload:** Unggah ke Hugging Face dengan verifikasi marker `upload_complete.json`.
