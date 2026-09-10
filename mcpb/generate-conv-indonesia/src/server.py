@@ -51,11 +51,12 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlencode
 
 from PIL import Image as PILImage
@@ -68,17 +69,17 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-import mcp.types as types
-from mcp.server.lowlevel import Server
-from mcp.server.stdio import stdio_server
+# Pastikan direktori src masuk dalam sys.path saat dipanggil via uv run
+_SRC_DIR = Path(__file__).resolve().parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
-from generate_conv_extra_20260731 import (  # noqa: E402
-    SYSTEM_PROMPT,
+from generate_conv_extra_20260731 import (
     SOURCE_ID_RE,
     SOURCE_ROW_RE,
+    SYSTEM_PROMPT,
     ConversationOutput,
     TurnMessage,
-    load_excluded_sources,
     _build_cendol_text,
     _build_cvqa_id_text,
     _build_indocareer_text,
@@ -92,7 +93,11 @@ from generate_conv_extra_20260731 import (  # noqa: E402
     _build_simple_summaries_text,
     _build_wikipedia_text,
     _ktp_image_url,
+    load_excluded_sources,
 )
+from mcp import types
+from mcp.server.lowlevel import Server
+from mcp.server.stdio import stdio_server
 
 # ─── Catatan tipe statis ───────────────────────────────────────────────────────
 # Resolver checker (ty) memakai mcp 1.29 dari env unsloth-env, sedangkan bundle ini
@@ -103,12 +108,12 @@ from generate_conv_extra_20260731 import (  # noqa: E402
 # menenangkan checker; runtime mcp 2.0.0 menerima semua call ini (sudah teruji).
 
 # ─── State & Konfigurasi ──────────────────────────────────────────────────────
-_CONFIG: Dict[str, Any] = {}
-_EXCLUDED_ROWS: Dict[str, set] = {}   # source_name -> {row_idx}       (akses index)
-_EXCLUDED_IDS: Dict[str, set] = {}    # source_name -> {id_value}      (akses id)
-_COUNT_CACHE: Dict[Tuple, int] = {}   # (dataset, config, split) -> num_rows
-_CSV_CACHE: Dict[str, Any] = {}       # dataset -> Dataset (IndoMMLU lokal)
-_OFFSETS_CACHE: Dict[str, List[Tuple[int, str]]] = {}  # key -> [(offset_global, id)] subset
+_CONFIG: dict[str, Any] = {}
+_EXCLUDED_ROWS: dict[str, set] = {}   # source_name -> {row_idx}       (akses index)
+_EXCLUDED_IDS: dict[str, set] = {}    # source_name -> {id_value}      (akses id)
+_COUNT_CACHE: dict[tuple, int] = {}   # (dataset, config, split) -> num_rows
+_CSV_CACHE: dict[str, Any] = {}       # dataset -> Dataset (IndoMMLU lokal)
+_OFFSETS_CACHE: dict[str, list[tuple[int, str]]] = {}  # key -> [(offset_global, id)] subset
 
 DEFAULT_OUTPUT_NAME = "generated_conv_agent.jsonl"
 DS_API = "https://datasets-server.huggingface.co"
@@ -125,7 +130,7 @@ class _DataSourceError(RuntimeError):
 #   "csv"     -> CSV asli di-cache lokal sekali, lalu random index (IndoMMLU)
 # id_key: bila diisi, deduplikasi via nilai kolom id (bukan Row #).
 # offsets_cols/offsets_keep: hanya utk access "offsets" (kolom label + id).
-SOURCES: List[Dict[str, Any]] = [
+SOURCES: list[dict[str, Any]] = [
     # ── TEXT ─────────────────────────────────────────────────────────────
     {
         "key": "IndoMMLU", "category": "text", "label": "ringan", "access": "csv",
@@ -266,11 +271,11 @@ def _output_path() -> Path:
 
 # ─── Kuota & progress (target 2000 text / 1000 vision — 2:1) ──────────────────
 
-def _targets() -> Tuple[int, int]:
+def _targets() -> tuple[int, int]:
     return (int(_CONFIG.get("text_target", 2000) or 0), int(_CONFIG.get("vision_target", 1000) or 0))
 
 
-def _count_done() -> Tuple[int, int]:
+def _count_done() -> tuple[int, int]:
     """Hitung percakapan text/vision yang sudah tersimpan di file output."""
     text_done = vision_done = 0
     p = _output_path()
@@ -291,7 +296,7 @@ def _count_done() -> Tuple[int, int]:
     return text_done, vision_done
 
 
-def _prefix_stats() -> Dict[str, int]:
+def _prefix_stats() -> dict[str, int]:
     """Hitung distribusi pemakaian token prefix <unused1..6> dari percakapan tersimpan.
 
     Dipakai untuk mengingatkan model agar SEMUA token terpakai seimbang (bukan cuma <unused4>).
@@ -323,7 +328,7 @@ _PREFIX_LABEL = {"<unused1>": "SUMMARIZE", "<unused2>": "TRANSLATE", "<unused3>"
                  "<unused4>": "QA", "<unused5>": "PARAPHRASE", "<unused6>": "GENERAL_CHAT"}
 
 
-def _pairs_stats() -> Dict[str, int]:
+def _pairs_stats() -> dict[str, int]:
     """Distribusi jumlah pasang (3/4/5 = 6/8/10 pesan) dari percakapan tersimpan."""
     counts = {"3": 0, "4": 0, "5": 0}
     p = _output_path()
@@ -341,7 +346,7 @@ def _pairs_stats() -> Dict[str, int]:
     return counts
 
 
-def _pairs_hint(stats: Dict[str, int]) -> str:
+def _pairs_hint(stats: dict[str, int]) -> str:
     total = sum(stats.values())
     if total == 0:
         return "Belum ada percakapan tersimpan — VARIASIKAN jumlah pasang: 3, 4, atau 5 (6/8/10 pesan), jangan selalu 4."
@@ -355,7 +360,7 @@ def _pairs_hint(stats: Dict[str, int]) -> str:
             f"supaya variasi 3/4/5 (6/8/10 pesan) seimbang di seluruh dataset.")
 
 
-def _prefix_hint(stats: Dict[str, int]) -> str:
+def _prefix_hint(stats: dict[str, int]) -> str:
     total = sum(stats.values())
     if total == 0:
         return "Belum ada percakapan tersimpan — pilih prefix sesuai task isi pesan, dan VARIASIKAN (jangan semua <unused4>)."
@@ -370,7 +375,7 @@ def _prefix_hint(stats: Dict[str, int]) -> str:
             f"tetap sesuaikan dengan isi pesan, jangan memaksakan token yang tidak cocok.")
 
 
-def _next_category() -> Optional[str]:
+def _next_category() -> str | None:
     """Kategori berikutnya agar rasio 2:1 terjaga (yang paling tertinggal rasionya)."""
     text_target, vision_target = _targets()
     text_done, vision_done = _count_done()
@@ -391,7 +396,7 @@ def _progress_impl() -> str:
     text_target, vision_target = _targets()
     text_done, vision_done = _count_done()
     next_cat = _next_category()
-    next_src: Optional[str] = None
+    next_src: str | None = None
     if next_cat:
         cands = [s for s in SOURCES if s["category"] == next_cat]
         if cands:
@@ -424,7 +429,7 @@ def _refresh_exclusions() -> int:
 
 # ─── Datasets-server (random access, tanpa unduh penuh) ───────────────────────
 
-def _ds_retry(path_query: str, attempts: int = 3, base_delay: float = 2.5) -> Dict[str, Any]:
+def _ds_retry(path_query: str, attempts: int = 10, base_delay: float = 3.0) -> dict[str, Any]:
     """GET endpoint datasets-server dengan retry backoff untuk error transien.
 
     Error "the dataset index is loading" & HTTP 429/5xx di-retry;
@@ -432,10 +437,29 @@ def _ds_retry(path_query: str, attempts: int = 3, base_delay: float = 2.5) -> Di
     """
     headers = {"User-Agent": "generate-conv-indonesia-mcpb"}
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        try:
+            for p in [Path(__file__).resolve().parents[3] / ".env", Path(__file__).resolve().parents[2] / ".env"]:
+                if p.exists():
+                    for line in p.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("HF_TOKEN="):
+                            token = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            break
+                if token:
+                    break
+        except Exception:
+            pass
+    if not token:
+        try:
+            token_file = Path.home() / ".cache" / "huggingface" / "token"
+            if token_file.exists():
+                token = token_file.read_text().strip()
+        except Exception:
+            pass
     if token:
         headers["Authorization"] = f"Bearer {token}"
     url = f"{DS_API}{path_query}"
-    last: Optional[Exception] = None
+    last: Exception | None = None
     for i in range(attempts):
         try:
             req = urllib.request.Request(url, headers=headers)
@@ -454,11 +478,12 @@ def _ds_retry(path_query: str, attempts: int = 3, base_delay: float = 2.5) -> Di
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             last = e
         if i < attempts - 1:
-            time.sleep(base_delay * (i + 1))
+            time.sleep(base_delay * (1.5 ** i) + random.uniform(1.0, 3.0))
     raise last if isinstance(last, Exception) else _DataSourceError(f"datasets-server gagal: {path_query}")
 
 
-def _count_rows(spec: Dict[str, Any]) -> int:
+
+def _count_rows(spec: dict[str, Any]) -> int:
     """Jumlah row split (cache per sumber) via /size."""
     key = (spec["dataset"], spec["config"], spec["split"])
     if key in _COUNT_CACHE:
@@ -477,7 +502,7 @@ def _count_rows(spec: Dict[str, Any]) -> int:
     return n
 
 
-def _source_weight(spec: Dict[str, Any]) -> int:
+def _source_weight(spec: dict[str, Any]) -> int:
     """Bobot sampling proporsional jumlah row. 'rows' → hitungan riil (cache);
     'csv'/'offsets' → approx_rows (subset), biar Cendol (12,8jt) tidak menenggelamkan sumber kecil."""
     if spec["access"] == "rows":
@@ -488,13 +513,13 @@ def _source_weight(spec: Dict[str, Any]) -> int:
     return max(1, int(spec.get("approx_rows", 1000) or 1000))
 
 
-def _pick_source(specs: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _pick_source(specs: list[dict[str, Any]]) -> dict[str, Any]:
     """Pilih source berbobot jumlah row (proporsional)."""
     weights = [_source_weight(s) for s in specs]
     return random.choices(specs, weights=weights, k=1)[0]
 
 
-def _fetch_row_at(spec: Dict[str, Any], offset: int) -> Dict[str, Any]:
+def _fetch_row_at(spec: dict[str, Any], offset: int) -> dict[str, Any]:
     """Ambil 1 row di offset acak via /rows (random access seluruh split)."""
     q = urlencode({"dataset": spec["dataset"], "config": spec["config"], "split": spec["split"],
                    "offset": offset, "length": 1})
@@ -517,7 +542,7 @@ def _pick_offset(rng: Any, num_rows: int, excluded: set) -> int:
     return rng.choice(allowed)
 
 
-def _csv_dataset(spec: Dict[str, Any]) -> Any:
+def _csv_dataset(spec: dict[str, Any]) -> Any:
     """IndoMMLU: unduh CSV asli SEKALI ke cache lokal, lalu random index (tanpa unduh ulang)."""
     key = spec["dataset"]
     if key in _CSV_CACHE:
@@ -538,7 +563,7 @@ def _csv_dataset(spec: Dict[str, Any]) -> Any:
 
 # ─── Image helpers (kolom image dari datasets-server) ─────────────────────────
 
-def _image_src_from_row(row: Dict[str, Any]) -> Optional[str]:
+def _image_src_from_row(row: dict[str, Any]) -> str | None:
     """Ambil URL `src` dari kolom image (dict tunggal atau List[dict])."""
     img = row.get("image")
     items = img if isinstance(img, list) else [img]
@@ -550,7 +575,7 @@ def _image_src_from_row(row: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _image_dims_from_row(row: Dict[str, Any]) -> Optional[Dict[str, int]]:
+def _image_dims_from_row(row: dict[str, Any]) -> dict[str, int] | None:
     img = row.get("image")
     items = img if isinstance(img, list) else [img]
     for item in items:
@@ -559,7 +584,7 @@ def _image_dims_from_row(row: Dict[str, Any]) -> Optional[Dict[str, int]]:
     return None
 
 
-def _image_info(spec: Dict[str, Any], row: Dict[str, Any], off: Optional[int]) -> Tuple[Optional[str], Optional[Dict[str, int]]]:
+def _image_info(spec: dict[str, Any], row: dict[str, Any], off: int | None) -> tuple[str | None, dict[str, int] | None]:
     if spec.get("image") != "src":
         return None, None
     src = _image_src_from_row(row)
@@ -571,7 +596,7 @@ def _image_info(spec: Dict[str, Any], row: Dict[str, Any], off: Optional[int]) -
 
 # ─── Sampling 1 baris acak ────────────────────────────────────────────────────
 
-def _build_context(spec: Dict[str, Any], row: Dict[str, Any]) -> str:
+def _build_context(spec: dict[str, Any], row: dict[str, Any]) -> str:
     if spec.get("builder"):
         raw = spec["builder"](row)
     elif spec.get("text_key"):
@@ -581,8 +606,8 @@ def _build_context(spec: Dict[str, Any], row: Dict[str, Any]) -> str:
     return str(raw)[:1500]
 
 
-def _build_sample_result(spec: Dict[str, Any], row: Dict[str, Any],
-                         off: Optional[int], idv: Optional[str], note: str) -> Dict[str, Any]:
+def _build_sample_result(spec: dict[str, Any], row: dict[str, Any],
+                         off: int | None, idv: str | None, note: str) -> dict[str, Any]:
     raw = _build_context(spec, row)
     image_ref, image_size = _image_info(spec, row, off)
     if idv:
@@ -606,16 +631,16 @@ def _build_sample_result(spec: Dict[str, Any], row: Dict[str, Any],
     return result
 
 
-def _sample_from_spec(spec: Dict[str, Any], seed: Optional[int]) -> Dict[str, Any]:
+def _sample_from_spec(spec: dict[str, Any], seed: int | None) -> dict[str, Any]:
     if spec["access"] == "offsets":
         return _sample_offsets(spec, seed)
     rng = random.Random(seed) if seed is not None else random
     name = spec["source_name"]
     ex_rows = _EXCLUDED_ROWS.get(name, set())
     ex_ids = _EXCLUDED_IDS.get(name, set())
-    idv: Optional[str] = None
-    off: Optional[int] = None
-    row: Optional[Dict[str, Any]] = None
+    idv: str | None = None
+    off: int | None = None
+    row: dict[str, Any] | None = None
     for _ in range(30):
         if spec["access"] == "csv":
             ds = _csv_dataset(spec)
@@ -642,7 +667,7 @@ def _sample_from_spec(spec: Dict[str, Any], seed: Optional[int]) -> Dict[str, An
 # ─── Implementasi tools (pure functions) ──────────────────────────────────────
 # ─── Offset map untuk subset (CVQA/SEACrowd): pyarrow columnar-read ──────────
 
-def _offsets_for(spec: Dict[str, Any]) -> List[Tuple[int, str]]:
+def _offsets_for(spec: dict[str, Any]) -> list[tuple[int, str]]:
     """Peta [(offset_global, id), ...] baris subset Indonesia — TANPA unduh penuh.
 
     Baca hanya kolom label + id dari semua shard parquet (columnar read via pyarrow
@@ -668,7 +693,7 @@ def _offsets_for(spec: Dict[str, Any]) -> List[Tuple[int, str]]:
     return result
 
 
-def _build_offset_map(spec: Dict[str, Any]) -> List[Tuple[int, str]]:
+def _build_offset_map(spec: dict[str, Any]) -> list[tuple[int, str]]:
     import fsspec
     import pyarrow.parquet as pq
 
@@ -681,7 +706,7 @@ def _build_offset_map(spec: Dict[str, Any]) -> List[Tuple[int, str]]:
     cols = spec["offsets_cols"]
     label_col, id_col = cols[0], cols[1]
     keep = spec["offsets_keep"]
-    result: List[Tuple[int, str]] = []
+    result: list[tuple[int, str]] = []
     base = 0
     for f in files:
         url = f.get("url")
@@ -702,7 +727,7 @@ def _build_offset_map(spec: Dict[str, Any]) -> List[Tuple[int, str]]:
     return result
 
 
-def _sample_subset_reject(spec: Dict[str, Any], seed: Optional[int], fallback_err: str = "") -> Dict[str, Any]:
+def _sample_subset_reject(spec: dict[str, Any], seed: int | None, fallback_err: str = "") -> dict[str, Any]:
     """Fallback: /rows + rejection sampling baris subset (tetap MULTIMODAL via src gambar).
 
     Jeda 0,35s antar request supaya tidak kena rate-limit datasets-server (429).
@@ -729,7 +754,7 @@ def _sample_subset_reject(spec: Dict[str, Any], seed: Optional[int], fallback_er
     raise _DataSourceError(f"{spec['key']}: tidak menemukan baris subset setelah 40 percobaan (fallback).")
 
 
-def _sample_offsets(spec: Dict[str, Any], seed: Optional[int]) -> Dict[str, Any]:
+def _sample_offsets(spec: dict[str, Any], seed: int | None) -> dict[str, Any]:
     """Sample acak dari subset Indonesia — vision tetap (gambar via /rows src).
     Fallback ke rejection sampling bila offset map pyarrow gagal/hang."""
     rng = random.Random(seed) if seed is not None else random
@@ -765,7 +790,7 @@ def _list_sources_impl(category: str) -> str:
     return "\n".join(lines) if len(lines) > 4 else "(tidak ada sumber untuk kategori ini)"
 
 
-async def _sample_row_impl(category: str, source_key: str, seed: Optional[int], include_heavy: bool) -> Dict[str, Any]:
+async def _sample_row_impl(category: str, source_key: str, seed: int | None, include_heavy: bool) -> dict[str, Any]:
     if category not in ("text", "vision"):
         # 'auto': pilih jenis sesuai kuota 2:1 (rasio paling tertinggal)
         category = _next_category() or random.choice(["text", "vision"])
@@ -796,7 +821,7 @@ async def _sample_row_impl(category: str, source_key: str, seed: Optional[int], 
 _IMAGE_MAX_RAW = 700 * 1024
 
 
-def _image_to_limited_jpeg(pil: PILImage.Image, max_raw: int = _IMAGE_MAX_RAW) -> Tuple[bytes, str]:
+def _image_to_limited_jpeg(pil: PILImage.Image, max_raw: int = _IMAGE_MAX_RAW) -> tuple[bytes, str]:
     """Kompres on-the-fly: downscale + JPEG adaptif sampai muat di bawah limit tool.
 
     Mulai dari 1024px/q85; bila masih melebihi max_raw, turunkan kualitas JPEG,
@@ -822,28 +847,83 @@ def _image_to_limited_jpeg(pil: PILImage.Image, max_raw: int = _IMAGE_MAX_RAW) -
             quality = 80
 
 
-def _read_image_base64(image_ref: str) -> Tuple[str, str]:
-    """Baca gambar → (base64 JPEG terkompres, mime_type) — muat < 1MB hasil tool."""
-    pil = _load_pil_from_ref(image_ref)
-    if pil is None:
-        raise ValueError(f"Gambar tidak dapat dibaca: {image_ref}")
-    data, mime = _image_to_limited_jpeg(pil)
-    return base64.b64encode(data).decode("ascii"), mime
+def _refresh_datasets_server_image_url(ref: str, source: str = "") -> str | None:
+    """Jika URL gambar Hugging Face datasets-server kadaluarsa (HTTP 403), minta signed URL segar."""
+    m_row = SOURCE_ROW_RE.match(source) if source else None
+    m_id = SOURCE_ID_RE.match(source) if source else None
+    ds_name: str | None = None
+    row_idx: int | None = None
+
+    if m_row:
+        src_name = m_row.group("name")
+        row_idx = int(m_row.group("idx"))
+        for s in SOURCES:
+            if s["source_name"] == src_name or s["key"] in src_name:
+                ds_name = s["dataset"]
+                break
+    elif m_id:
+        src_name = m_id.group("name")
+        for s in SOURCES:
+            if s["source_name"] == src_name or s["key"] in src_name:
+                ds_name = s["dataset"]
+                break
+
+    # Fallback: ekstrak dataset name dan row index langsung dari pola URL cached-assets
+    # Pola: cached-assets/<org>/<repo>/--/<hash>/--/<config>/<split>/<row_idx>/image/...
+    if not ds_name or row_idx is None:
+        m_url = re.search(r"cached-assets/([^/]+/[^/]+)/--/[^/]+/--/[^/]+/([^/]+)/(\d+)/image", ref)
+        if m_url:
+            ds_name = m_url.group(1)
+            row_idx = int(m_url.group(3))
+
+    if ds_name and row_idx is not None:
+        try:
+            url_query = f"/rows?dataset={urllib.parse.quote(ds_name, safe='')}&config=default&split=train&offset={row_idx}&length=1"
+            req = urllib.request.Request(f"{DS_API}{url_query}", headers={"User-Agent": "generate-conv-indonesia-mcpb"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                rows = data.get("rows", [])
+                if rows:
+                    row_data = rows[0].get("row", {})
+                    fresh_src = _image_src_from_row(row_data)
+                    if fresh_src:
+                        return fresh_src
+        except Exception:
+            pass
+    return None
 
 
-def _load_pil_from_ref(ref: str) -> Optional[PILImage.Image]:
+def _load_pil_from_ref(ref: str, source: str = "") -> PILImage.Image | None:
     if ref.startswith(("http://", "https://")):
         req = urllib.request.Request(ref, headers={"User-Agent": "generate-conv-indonesia-mcpb"})
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            return PILImage.open(io.BytesIO(resp.read())).convert("RGB")
+        try:
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                return PILImage.open(io.BytesIO(resp.read())).convert("RGB")
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                fresh_url = _refresh_datasets_server_image_url(ref, source)
+                if fresh_url:
+                    req_fresh = urllib.request.Request(fresh_url, headers={"User-Agent": "generate-conv-indonesia-mcpb"})
+                    with urllib.request.urlopen(req_fresh, timeout=45) as resp_fresh:
+                        return PILImage.open(io.BytesIO(resp_fresh.read())).convert("RGB")
+            raise
     p = Path(ref)
     if p.exists():
         return PILImage.open(p).convert("RGB")
     return None
 
 
+def _read_image_base64(image_ref: str, source: str = "") -> tuple[str, str]:
+    """Baca gambar → (base64 JPEG terkompres, mime_type) — muat < 1MB hasil tool."""
+    pil = _load_pil_from_ref(image_ref, source)
+    if pil is None:
+        raise ValueError(f"Gambar tidak dapat dibaca: {image_ref}")
+    data, mime = _image_to_limited_jpeg(pil)
+    return base64.b64encode(data).decode("ascii"), mime
+
+
 def _save_conversation_impl(source: str, category: str, conversation_json: str,
-                            image_ref: str, output_path: str, num_pairs: str = "") -> Dict[str, Any]:
+                            image_ref: str, output_path: str, num_pairs: str = "") -> dict[str, Any]:
     try:
         data = json.loads(conversation_json)
         if not isinstance(data, list) or not data:
@@ -966,6 +1046,191 @@ def _save_conversation_impl(source: str, category: str, conversation_json: str,
             "num_pairs": record["num_pairs"], "num_turns": record["num_turns"]}
 
 
+def _normalize_prefix_text(content: str, prefixes: list[str] | None = None) -> str:
+    """Normalisasi prefix pada konten asisten: tanpa spasi antar prefix, tanpa repetisi."""
+    if not isinstance(content, str):
+        return content
+
+    content_clean = content.replace("\\n", "\n").strip()
+    for leak in ["SUMMARIZE", "TRANSLATE", "NER", "QA", "PARAPHRASE", "GENERAL_CHAT"]:
+        content_clean = re.sub(rf"^\s*{leak}\s*", "", content_clean, flags=re.IGNORECASE)
+
+    if prefixes is not None:
+        seen = set()
+        deduped = []
+        for p in prefixes:
+            p_clean = re.sub(r"\s+", "", str(p))
+            if p_clean in {"<unused1>", "<unused2>", "<unused3>", "<unused4>", "<unused5>", "<unused6>"} and p_clean not in seen:
+                seen.add(p_clean)
+                deduped.append(p_clean)
+        body = re.sub(r"<unused[1-6]>", "", content_clean)
+        body = re.sub(r"[ \t]{2,}", " ", body)
+        body = re.sub(r"\n{3,}", "\n\n", body).strip()
+        prefix_str = "".join(deduped)
+        return f"{prefix_str} {body}".strip() if prefix_str else body
+
+    match = re.match(r"^(\s*(?:<unused[1-6]>\s*)+)(.*)$", content_clean, flags=re.DOTALL)
+    if not match:
+        return content_clean
+
+    prefix_block = match.group(1)
+    rest_body = match.group(2)
+
+    tokens = re.findall(r"<unused[1-6]>", prefix_block)
+    seen = set()
+    deduped = []
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            deduped.append(t)
+
+    prefix_str = "".join(deduped)
+    body = re.sub(r"<unused[1-6]>", "", rest_body)
+    body = re.sub(r"[ \t]{2,}", " ", body)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return f"{prefix_str} {body}".strip()
+
+
+def _review_conversation_impl(
+    conversation_id: Any,
+    action: str = "read",
+    updates: Any | None = None,
+    output_path: str = ""
+) -> dict[str, Any]:
+    path = Path(output_path) if output_path else _output_path()
+    if not path.exists():
+        raise FileNotFoundError(f"File dataset tidak ditemukan: {path}")
+
+    try:
+        conv_id = int(conversation_id)
+    except (TypeError, ValueError):
+        raise ValueError(f"conversation_id harus berupa angka integer valid, bukan '{conversation_id}'")
+
+    if action not in ("read", "edit"):
+        raise ValueError(f"action harus 'read' atau 'edit', bukan '{action}'")
+
+    lines: list[str] = []
+    target_idx: int | None = None
+    target_record: dict[str, Any] | None = None
+
+    with open(path, "r", encoding="utf-8") as f:
+        for idx, line in enumerate(f):
+            lines.append(line)
+            if target_record is None:
+                stripped = line.strip()
+                if stripped:
+                    try:
+                        item = json.loads(stripped)
+                        if item.get("id") == conv_id:
+                            target_idx = idx
+                            target_record = item
+                    except json.JSONDecodeError:
+                        continue
+
+    if target_record is None or target_idx is None:
+        raise ValueError(f"Percakapan dengan id {conv_id} tidak ditemukan di {path.name}")
+
+    if action == "read":
+        return {
+            "ok": True,
+            "action": "read",
+            "id": conv_id,
+            "category": target_record.get("category"),
+            "source": target_record.get("source"),
+            "num_turns": target_record.get("num_turns"),
+            "reviewed": target_record.get("reviewed", False),
+            "edited_turns": target_record.get("edited_turns", 0),
+            "messages": target_record.get("messages", []),
+            "images": target_record.get("images", []),
+        }
+
+    if not updates:
+        raise ValueError("Parameter 'updates' wajib diisi jika action='edit'")
+
+    if isinstance(updates, str):
+        try:
+            updates_list = json.loads(updates)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Format JSON 'updates' tidak valid: {e}")
+    else:
+        updates_list = updates
+
+    if not isinstance(updates_list, list) or not updates_list:
+        raise ValueError("'updates' harus berupa array objek modifikasi turn [{turn_index, content}]")
+
+    messages = target_record.get("messages", [])
+    total_msgs = len(messages)
+    modified_count = 0
+    edit_logs: list[dict[str, Any]] = []
+
+    for up in updates_list:
+        if not isinstance(up, dict):
+            continue
+        turn_idx_raw = up.get("turn_index")
+        if turn_idx_raw is None:
+            raise ValueError(f"Setiap update wajib menentukan 'turn_index': {up}")
+        try:
+            t_idx = int(turn_idx_raw)
+        except (ValueError, TypeError):
+            raise ValueError(f"'turn_index' harus integer: {turn_idx_raw}")
+
+        if t_idx < 0 or t_idx >= total_msgs:
+            raise ValueError(f"'turn_index' {t_idx} di luar rentang pesan (0 .. {total_msgs - 1})")
+
+        msg = messages[t_idx]
+        curr_role = msg.get("role", "")
+        new_content = up.get("content")
+        new_prefixes = up.get("prefixes")
+
+        if new_content is None:
+            raise ValueError(f"Update turn_index {t_idx} wajib menyertakan 'content'")
+
+        new_content_str = str(new_content).strip()
+
+        if curr_role == "assistant":
+            cleaned_content = _normalize_prefix_text(new_content_str, new_prefixes)
+            min_len = 40 if target_record.get("category") == "vision_chat" else 60
+            if len(cleaned_content) < min_len:
+                raise ValueError(
+                    f"Turn assistant [{t_idx}] terlalu pendek ({len(cleaned_content)} kar). "
+                    f"Minimal elaborasi {min_len} karakter."
+                )
+            msg["content"] = cleaned_content
+        elif curr_role == "user":
+            user_clean = re.sub(r"<unused[1-6]>", "", new_content_str).strip()
+            if t_idx == 1 and target_record.get("category") == "vision_chat" and not user_clean.startswith("📷"):
+                user_clean = "📷\n" + user_clean
+            msg["content"] = user_clean
+        elif curr_role == "system":
+            msg["content"] = new_content_str
+
+        modified_count += 1
+        edit_logs.append({
+            "turn_index": t_idx,
+            "role": curr_role,
+            "snippet": msg["content"][:100] + ("..." if len(msg["content"]) > 100 else ""),
+        })
+
+    target_record["reviewed"] = True
+    target_record["edited_turns"] = int(target_record.get("edited_turns", 0)) + modified_count
+    lines[target_idx] = json.dumps(target_record, ensure_ascii=False) + "\n"
+
+    temp_file = path.with_suffix(".tmp_review")
+    with open(temp_file, "w", encoding="utf-8") as out_f:
+        out_f.writelines(lines)
+    temp_file.replace(path)
+
+    return {
+        "ok": True,
+        "action": "edit",
+        "id": conv_id,
+        "edited_turns_in_this_call": modified_count,
+        "total_edited_turns": target_record["edited_turns"],
+        "reviewed": True,
+        "edit_logs": edit_logs,
+    }
+
+
 def _stats_impl(output_path: str) -> str:
     p = Path(output_path) if output_path else _output_path()
     if not p.exists():
@@ -1063,7 +1328,7 @@ LANGKAH:
 
 # ─── MCP Handlers (low-level, mcp>=2.0) ───────────────────────────────────────
 
-def _tool_defs() -> List[types.Tool]:
+def _tool_defs() -> list[types.Tool]:
     return [
         types.Tool(name="list_sources", description="Katalog INSTANT 15 sumber Indonesia (text/vision) — random-access datasets-server, tanpa load dataset, selalu cepat. category: all|text|vision.",  # type: ignore
                    input_schema={"type": "object", "properties": {"category": {"type": "string", "enum": ["all", "text", "vision"], "default": "all"}}, "additionalProperties": False}),
@@ -1078,10 +1343,12 @@ def _tool_defs() -> List[types.Tool]:
                                 "required": ["source", "category", "conversation_json"], "additionalProperties": False}),
         types.Tool(name="get_output_stats", description="Statistik file output JSONL (jumlah percakapan, kategori, sumber teratas, turn rata-rata).",  # type: ignore
                    input_schema={"type": "object", "properties": {"output_path": {"type": "string"}}, "additionalProperties": False}),
+        types.Tool(name="review_conversation", description="Inspeksi (action='read') atau edit manual turn percakapan (action='edit') pada file output JSONL. Mendukung verifikasi isi, perbaikan role user/assistant, normalisasi multi-prefix bebas spasi/repetisi, dan pengeditan multi-turn sekaligus via looping updates=[{turn_index, content, prefixes}].",  # type: ignore
+                   input_schema={"type": "object", "properties": {"conversation_id": {"type": "integer", "description": "ID percakapan yang ingin dibaca atau diedit"}, "action": {"type": "string", "enum": ["read", "edit"], "default": "read", "description": "'read' untuk melihat isi pesan, 'edit' untuk memperbarui pesan"}, "updates": {"type": "array", "description": "Daftar pembaruan turn jika action='edit': [{turn_index, content, prefixes}]", "items": {"type": "object", "properties": {"turn_index": {"type": "integer"}, "content": {"type": "string"}, "prefixes": {"type": "array", "items": {"type": "string"}}}}}, "output_path": {"type": "string", "description": "Path kustom file JSONL (opsional)"}}, "required": ["conversation_id"], "additionalProperties": False}),
     ]
 
 
-async def handle_list_tools(ctx, params: Optional[types.PaginatedRequestParams]) -> types.ListToolsResult:
+async def handle_list_tools(ctx, params: types.PaginatedRequestParams | None) -> types.ListToolsResult:
     return types.ListToolsResult(tools=_tool_defs())
 
 
@@ -1099,7 +1366,7 @@ async def handle_call_tool(ctx, params: types.CallToolRequestParams) -> types.Ca
                 args.get("seed"), bool(args.get("include_heavy", True)),
             )
             # TextContent (JSON konteks) + ImageContent (gambar vision) dalam SATU hasil
-            parts: List[Any] = [types.TextContent(type="text", text=json.dumps(info, ensure_ascii=False, indent=2))]
+            parts: list[Any] = [types.TextContent(type="text", text=json.dumps(info, ensure_ascii=False, indent=2))]
             if info.get("image_ref") and info.get("image_available"):
                 try:
                     b64, mime = _read_image_base64(str(info["image_ref"]))
@@ -1122,13 +1389,31 @@ async def handle_call_tool(ctx, params: types.CallToolRequestParams) -> types.Ca
             return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))])
         if name == "get_output_stats":
             return types.CallToolResult(content=[types.TextContent(type="text", text=_stats_impl(str(args.get("output_path", ""))))])
+        if name == "review_conversation":
+            res_review = _review_conversation_impl(
+                conversation_id=args.get("conversation_id"),
+                action=str(args.get("action", "read")),
+                updates=args.get("updates"),
+                output_path=str(args.get("output_path", "")),
+            )
+            parts_review: list[Any] = [types.TextContent(type="text", text=json.dumps(res_review, ensure_ascii=False, indent=2))]
+            # Jika mode read dan ada gambar terkait, sertakan ImageContent agar agent langsung bisa melihat gambarnya
+            if res_review.get("action") == "read" and res_review.get("images"):
+                source_val = str(res_review.get("source", ""))
+                for img_ref in res_review["images"]:
+                    try:
+                        b64_img, mime_img = _read_image_base64(str(img_ref), source=source_val)
+                        parts_review.append(types.ImageContent(type="image", data=b64_img, mime_type=mime_img))
+                    except Exception as e:
+                        parts_review.append(types.TextContent(type="text", text=f"⚠️ (gambar {img_ref} gagal dimuat: {e})"))
+            return types.CallToolResult(content=parts_review)
         return types.CallToolResult(is_error=True, content=[types.TextContent(type="text", text=f"Unknown tool: {name}")])
     except Exception as e:
         # Tool execution error (isError=true) — Claude bisa self-correct (spesifikasi MCP)
         return types.CallToolResult(is_error=True, content=[types.TextContent(type="text", text=str(e))])
 
 
-async def handle_list_prompts(ctx, params: Optional[types.PaginatedRequestParams]) -> types.ListPromptsResult:
+async def handle_list_prompts(ctx, params: types.PaginatedRequestParams | None) -> types.ListPromptsResult:
     return types.ListPromptsResult(prompts=[
         types.Prompt(
             name="generate_conversation",
