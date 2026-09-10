@@ -122,13 +122,23 @@ def _():
     VISION_SFT_CONFIG = "vision_sft"
     VISION_ORPO_CONFIG = "vision_orpo"
 
+    DATASET_SEA_INSTRUCT_REPO = "aisingapore/SEA-Instruct-2602"
+    LOCAL_SYNTHETIC_DATA_PATH = "data/synthetic/generated_conv_agent.jsonl"
+
     ENABLE_MTO_PREFIX = True      # Multi-task prefix routing (<unused1>..<unused6>)
 
-    SAMPLE_TRAIN_CHAT = 0         # 0 = ambil seluruh data
-    SAMPLE_TRAIN_INDOQA = 0
+    SAMPLE_TRAIN_CHAT = 0         # 0 = ambil seluruh data HF chat_sft
+    SAMPLE_TRAIN_INDOQA = 0       # 0 = ambil seluruh data HF indoqa_sft
     SAMPLE_TRAIN_TEXT_ORPO = 0
     SAMPLE_TRAIN_VISION_SFT = 0
     SAMPLE_TRAIN_VISION_ORPO = 0
+
+    ENABLE_LOCAL_SYNTHETIC = True # True = muat percakapan sintetis lokal (generated_conv_agent.jsonl) bila ada
+    SAMPLE_LOCAL_SYNTHETIC = 0    # 0 = muat seluruh data lokal (2K text + 1K vision)
+
+    ENABLE_SEA_INSTRUCT = True    # True = muat sampel berkualitas dari aisingapore/SEA-Instruct-2602
+    SAMPLE_SEA_INSTRUCT = 10000   # Kuota sample SEA-Instruct (misal 10.000; 0 = nonaktifkan)
+    SEA_INSTRUCT_MIN_QUALITY = "Excellent" # Filter kualitas prompt SEA-Instruct ("Excellent", "Good", atau "all")
 
     VISION_TEST_SIZE = 0.05       # hold-out PERCAKAPAN vision utuh untuk eval-mm (95/5 di level conv)
     MAX_EVAL_TEXT_SAMPLES = 200   # cap eval teks per-step (deterministik, group-aware per chat_idx)
@@ -256,13 +266,16 @@ def _():
         CANGKOK_SUBFOLDER,
         DATALOADER_NUM_WORKERS,
         DATALOADER_PREFETCH_FACTOR,
+        DATASET_SEA_INSTRUCT_REPO,
         DATASET_TEXT_REPO,
         DATASET_VISION_REPO,
         DEVEC_SVD_TAU,
         ENABLE_DEVEC_STEERING,
         ENABLE_FLAW_AWARE_LOSS,
         ENABLE_LATA_ALIGNMENT,
+        ENABLE_LOCAL_SYNTHETIC,
         ENABLE_MTO_PREFIX,
+        ENABLE_SEA_INSTRUCT,
         ENABLE_STEERING,
         ENABLE_TLPO_LOSS,
         FINAL_PREFIX,
@@ -276,6 +289,7 @@ def _():
         GROK_LAMB,
         JOINT_PREFIX,
         LOAD_IN_4BIT,
+        LOCAL_SYNTHETIC_DATA_PATH,
         LORA_ALPHA,
         LORA_DROPOUT,
         LORA_RANK,
@@ -315,11 +329,14 @@ def _():
         PROJECTOR_BRANCH,
         RUN_ORPO,
         RUN_SFT,
+        SAMPLE_LOCAL_SYNTHETIC,
+        SAMPLE_SEA_INSTRUCT,
         SAMPLE_TRAIN_CHAT,
         SAMPLE_TRAIN_INDOQA,
         SAMPLE_TRAIN_TEXT_ORPO,
         SAMPLE_TRAIN_VISION_ORPO,
         SAMPLE_TRAIN_VISION_SFT,
+        SEA_INSTRUCT_MIN_QUALITY,
         SEED,
         SFT_GRADIENT_ACCUMULATION_STEPS,
         SFT_LABEL_SMOOTHING_FACTOR,
@@ -1499,7 +1516,292 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
             })
         return rows
 
-    return load_hf_samples, text_orpo_to_joint, text_sft_to_joint
+    def load_local_synthetic_conv(
+        jsonl_path: str,
+        n_samples: int = 0,
+        enable_mto: bool = True,
+        processor = None,
+        seed: int = 42,
+    ) -> tuple[list[dict], list[dict]]:
+        """
+        Muat percakapan sintetis lokal (generated_conv_agent.jsonl).
+        Unroll per giliran asisten untuk teks dan visual.
+        """
+        import json as _json
+        import os as _os
+        from PIL import Image as _PILImage
+
+        if not _os.path.exists(jsonl_path):
+            print(f"  ℹ️ [LOCAL-DATA] File '{jsonl_path}' tidak ditemukan (dilewati).")
+            return [], []
+
+        print(f"[LOCAL-DATA] Memuat data sintetis lokal dari {jsonl_path}...")
+        try:
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f if line.strip()]
+        except Exception as e:
+            print(f"  ⚠️ [LOCAL-DATA] Gagal membaca file {jsonl_path}: {e}")
+            return [], []
+
+        if n_samples > 0 and len(lines) > n_samples:
+            random.seed(seed)
+            lines = random.sample(lines, n_samples)
+
+        synth_text_rows = []
+        synth_vision_rows = []
+
+        for line_idx, line in enumerate(lines):
+            try:
+                obj = _json.loads(line)
+            except Exception:
+                continue
+
+            cat = obj.get("category", "text_nlu_chat")
+            messages = obj.get("messages", [])
+            raw_images = obj.get("images", [])
+
+            is_vision = (cat == "vision_chat") or any(
+                "📷" in m.get("content", "") for m in messages if m.get("role") == "user"
+            )
+
+            if is_vision:
+                loaded_images = []
+                for img_p in raw_images:
+                    if isinstance(img_p, str) and _os.path.exists(img_p):
+                        try:
+                            loaded_images.append(_PILImage.open(img_p).convert("RGB"))
+                        except Exception:
+                            pass
+
+                image_idx = 0
+                clean_context = []
+                for msg in messages:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "user" and "📷" in content:
+                        n_imgs = content.count("📷")
+                        text_part = content.replace("📷", "").strip()
+                        c_blocks = []
+                        for _ in range(n_imgs):
+                            c_blocks.append({"type": "image"})
+                            image_idx += 1
+                        if text_part:
+                            c_blocks.append({"type": "text", "text": text_part})
+                        clean_context.append({"role": role, "content": c_blocks})
+                    elif role == "assistant":
+                        clean_context.append({"role": role, "content": [{"type": "text", "text": content}]})
+                    else:
+                        clean_context.append({"role": role, "content": [{"type": "text", "text": content}]})
+
+                for i, msg in enumerate(clean_context):
+                    if msg["role"] != "assistant":
+                        continue
+                    context = clean_context[:i]
+                    if not context:
+                        continue
+
+                    target_text = ""
+                    if isinstance(msg["content"], list):
+                        for b in msg["content"]:
+                            if isinstance(b, dict) and "text" in b:
+                                target_text = b["text"]
+                    else:
+                        target_text = msg["content"]
+
+                    if not target_text:
+                        continue
+
+                    if enable_mto:
+                        target_text = format_mto_target(target_text, "vision")
+
+                    num_imgs_in_ctx = sum(
+                        1 for m in context for b in m["content"]
+                        if isinstance(b, dict) and b.get("type") == "image"
+                    )
+                    ctx_images = loaded_images[:num_imgs_in_ctx] if loaded_images else []
+
+                    prompt_text = ""
+                    if processor is not None and hasattr(processor, "apply_chat_template"):
+                        try:
+                            prompt_text = processor.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
+                        except Exception:
+                            prompt_text = ""
+
+                    synth_vision_rows.append({
+                        "prompt_text": prompt_text,
+                        "target_text": target_text.strip(),
+                        "dataset_idx": -1,
+                        "image_indices": [],
+                        "images": ctx_images,
+                        "_modality": "vision",
+                        "_source": "local_synthetic_vision",
+                        "_conv_id": f"synth_{obj.get('id', line_idx)}",
+                    })
+            else:
+                clean_context = []
+                for msg in messages:
+                    clean_context.append({"role": msg["role"], "content": [{"type": "text", "text": msg["content"]}]})
+
+                for i, msg in enumerate(clean_context):
+                    if msg["role"] != "assistant":
+                        continue
+                    context = clean_context[:i]
+                    if not context:
+                        continue
+
+                    target_text = msg["content"][0]["text"].strip()
+                    if not target_text:
+                        continue
+
+                    if enable_mto:
+                        target_text = format_mto_target(target_text, "general_chat")
+
+                    prompt_text = ""
+                    if processor is not None and hasattr(processor, "apply_chat_template"):
+                        try:
+                            prompt_text = processor.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
+                        except Exception:
+                            prompt_text = ""
+
+                    synth_text_rows.append({
+                        "prompt_text": prompt_text,
+                        "target_text": target_text.strip(),
+                        "dataset_idx": -1,
+                        "image_indices": [],
+                        "images": [],
+                        "_modality": "text",
+                        "_source": "local_synthetic_text",
+                        "_conv_id": f"synth_{obj.get('id', line_idx)}",
+                    })
+
+        print(f"  ✅ [LOCAL-DATA] Unrolled: {len(synth_text_rows)} rows teks, {len(synth_vision_rows)} rows vision.")
+        return synth_text_rows, synth_vision_rows
+
+    def load_sea_instruct_samples(
+        repo_id: str = "aisingapore/SEA-Instruct-2602",
+        config_name: str = "Indonesian",
+        n_samples: int = 10000,
+        min_quality: str = "Excellent",
+        enable_mto: bool = True,
+        processor = None,
+        seed: int = 42,
+    ) -> list[dict]:
+        """
+        Streaming loader untuk dataset aisingapore/SEA-Instruct-2602 (Indonesian).
+        Mengonversi percakapan ke format joint SFT dengan task routing MTO.
+        """
+        import ast as _ast
+        import json as _json
+
+        if n_samples <= 0:
+            return []
+
+        print(f"[SEA-INSTRUCT] Streaming {n_samples} sampel berkualitas ({min_quality}) dari {repo_id} ({config_name})...")
+        try:
+            ds = load_dataset(repo_id, config_name, split="train", streaming=True)
+            ds = ds.shuffle(seed=seed, buffer_size=10000)
+        except Exception as e:
+            print(f"  ⚠️ [SEA-INSTRUCT] Gagal menginisiasi stream: {e}")
+            return []
+
+        task_tag_mapping = {
+            "Summarization": "summarize",
+            "Translation": "translate",
+            "Information_Extraction": "ner",
+            "Math_and_Scientific_Problem_Solving": "qa",
+            "Reasoning": "qa",
+            "Coding_and_Debugging": "qa",
+            "Question_Answering": "qa",
+            "Paraphrase": "paraphrase",
+            "Creative_Writing_and_Generation": "general_chat",
+            "Recommendation_and_Advice": "general_chat",
+        }
+
+        sea_rows = []
+        count = 0
+
+        for sample in ds:
+            if count >= n_samples:
+                break
+
+            if min_quality and min_quality.lower() != "all":
+                if sample.get("prompt_input_quality") != min_quality:
+                    continue
+                if sample.get("prompt_is_coherent") is False or sample.get("prompt_is_natural") is False:
+                    continue
+
+            raw_conv = sample.get("conversations", "")
+            if not raw_conv:
+                continue
+
+            try:
+                if isinstance(raw_conv, str):
+                    try:
+                        conv_list = _json.loads(raw_conv)
+                    except Exception:
+                        conv_list = _ast.literal_eval(raw_conv)
+                else:
+                    conv_list = raw_conv
+            except Exception:
+                continue
+
+            if not isinstance(conv_list, list) or len(conv_list) < 2:
+                continue
+
+            primary_task = sample.get("prompt_primary_task", "general_chat")
+            mapped_task = task_tag_mapping.get(primary_task, "general_chat")
+
+            clean_context = []
+            for turn in conv_list:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                clean_context.append({"role": role, "content": [{"type": "text", "text": content}]})
+
+            for i, msg in enumerate(clean_context):
+                if msg["role"] != "assistant":
+                    continue
+                context = clean_context[:i]
+                if not context:
+                    continue
+
+                target_text = msg["content"][0]["text"].strip()
+                if not target_text:
+                    continue
+
+                if enable_mto:
+                    target_text = format_mto_target(target_text, mapped_task)
+
+                prompt_text = ""
+                if processor is not None and hasattr(processor, "apply_chat_template"):
+                    try:
+                        prompt_text = processor.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
+                    except Exception:
+                        prompt_text = ""
+
+                sea_rows.append({
+                    "prompt_text": prompt_text,
+                    "target_text": target_text.strip(),
+                    "dataset_idx": -1,
+                    "image_indices": [],
+                    "images": [],
+                    "_modality": "text",
+                    "_source": "sea_instruct_2602",
+                    "_conv_id": f"sea_{sample.get('conversations_id', str(count))[:16]}",
+                })
+                count += 1
+                if count >= n_samples:
+                    break
+
+        print(f"  ✅ [SEA-INSTRUCT] Berhasil memuat {len(sea_rows)} rows SFT.")
+        return sea_rows
+
+    return (
+        load_hf_samples,
+        load_local_synthetic_conv,
+        load_sea_instruct_samples,
+        text_orpo_to_joint,
+        text_sft_to_joint,
+    )
 
 
 @app.cell
@@ -2552,18 +2854,27 @@ def _(
 
 @app.cell
 def _(
+    DATASET_SEA_INSTRUCT_REPO,
     DATASET_TEXT_REPO,
     Dataset,
+    ENABLE_LOCAL_SYNTHETIC,
     ENABLE_MTO_PREFIX,
+    ENABLE_SEA_INSTRUCT,
+    LOCAL_SYNTHETIC_DATA_PATH,
     MAX_EVAL_TEXT_SAMPLES,
+    SAMPLE_LOCAL_SYNTHETIC,
+    SAMPLE_SEA_INSTRUCT,
     SAMPLE_TRAIN_CHAT,
     SAMPLE_TRAIN_INDOQA,
+    SEA_INSTRUCT_MIN_QUALITY,
     SEED,
     TEXT_CHAT_CONFIG,
     TEXT_INDOQA_CONFIG,
     VISION_TEST_SIZE,
     format_mto_target,
     load_hf_samples,
+    load_local_synthetic_conv,
+    load_sea_instruct_samples,
     mo,
     processor,
     random,
@@ -2574,10 +2885,10 @@ def _(
         processor is None,
         mo.md("⏭️ **[JOINT-SFT] Model tidak dimuat — data prep dilewati.**"),
     )
-    print("[JOINT-SFT] ===== Membangun dataset joint V8 (vision + teks + MTO) =====")
+    print("[JOINT-SFT] ===== Membangun dataset joint V8 (vision + teks + synthetic + SEA-Instruct) =====")
 
-    # ---- 1. Unroll VISION SFT ----
-    print("[JOINT-SFT] Unrolling vision SFT (text-only pass)...")
+    # ---- 1. Unroll HF VISION SFT ----
+    print("[JOINT-SFT] Unrolling HF vision SFT (text-only pass)...")
     vision_rows = []
     messages_list = vision_train_dataset["messages"]
     _arrow_images = vision_train_dataset._data.column("images")
@@ -2633,38 +2944,82 @@ def _(
                     "target_text": target_text,
                     "dataset_idx": _idx,
                     "image_indices": list(range(_num_context_images)),
+                    "images": [],
                     "_modality": "vision",
+                    "_source": "hf_vision_sft",
                 })
-    print(f"  ✅ Vision rows (unrolled + MTO prefix): {len(vision_rows)}")
+    print(f"  ✅ HF Vision rows (unrolled + MTO prefix): {len(vision_rows)}")
 
-    # ---- 2. TEKS rows (chat_sft + indoqa_sft -> joint format) ----
-    print("[JOINT-SFT] Memuat teks train (chat_sft + indoqa_sft)...")
+    # ---- 2. HF TEKS rows (chat_sft + indoqa_sft -> joint format) ----
+    print("[JOINT-SFT] Memuat HF teks train (chat_sft + indoqa_sft)...")
     _chat_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "train", SAMPLE_TRAIN_CHAT, seed=SEED)
     _indoqa_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "train", SAMPLE_TRAIN_INDOQA, seed=SEED)
     text_rows = text_sft_to_joint(_chat_samples, is_chat=True, enable_mto=ENABLE_MTO_PREFIX) + text_sft_to_joint(_indoqa_samples, is_chat=False, enable_mto=ENABLE_MTO_PREFIX)
-    print(f"  ✅ Text rows total: {len(text_rows)} (chat={len(_chat_samples)}, indoqa={len(_indoqa_samples)})")
+    print(f"  ✅ HF Text rows total: {len(text_rows)} (chat={len(_chat_samples)}, indoqa={len(_indoqa_samples)})")
 
-    # ---- 3. HOLD-OUT EVAL VISION: 5% PERCAKAPAN UTUH ----
-    _conv_ids = sorted({r["dataset_idx"] for r in vision_rows})
+    # ---- 3. LOCAL SYNTHETIC CONVERSATIONS (generated_conv_agent.jsonl) ----
+    synth_text_rows, synth_vision_rows = [], []
+    if ENABLE_LOCAL_SYNTHETIC:
+        synth_text_rows, synth_vision_rows = load_local_synthetic_conv(
+            LOCAL_SYNTHETIC_DATA_PATH,
+            n_samples=SAMPLE_LOCAL_SYNTHETIC,
+            enable_mto=ENABLE_MTO_PREFIX,
+            processor=processor,
+            seed=SEED,
+        )
+
+    # ---- 4. STREAMING SEA-INSTRUCT-2602 (aisingapore/SEA-Instruct-2602) ----
+    sea_rows = []
+    if ENABLE_SEA_INSTRUCT and SAMPLE_SEA_INSTRUCT > 0:
+        sea_rows = load_sea_instruct_samples(
+            repo_id=DATASET_SEA_INSTRUCT_REPO,
+            config_name="Indonesian",
+            n_samples=SAMPLE_SEA_INSTRUCT,
+            min_quality=SEA_INSTRUCT_MIN_QUALITY,
+            enable_mto=ENABLE_MTO_PREFIX,
+            processor=processor,
+            seed=SEED,
+        )
+
+    # ---- 5. HOLD-OUT EVAL VISION: 5% PERCAKAPAN UTUH ----
+    _conv_ids_list = []
+    for r in vision_rows:
+        _d_idx = r.get("dataset_idx")
+        if isinstance(_d_idx, int) and _d_idx >= 0:
+            _conv_ids_list.append(_d_idx)
+    _conv_ids = sorted(set(_conv_ids_list))
     random.seed(SEED)
     random.shuffle(_conv_ids)
-    _n_eval_conv = max(5, int(len(_conv_ids) * VISION_TEST_SIZE))
+    _n_eval_conv = max(5, int(len(_conv_ids) * VISION_TEST_SIZE)) if _conv_ids else 0
     _eval_conv_set = set(_conv_ids[:_n_eval_conv])
-    _vision_eval_rows = [r for r in vision_rows if r["dataset_idx"] in _eval_conv_set]
-    vision_train_rows = [r for r in vision_rows if r["dataset_idx"] not in _eval_conv_set]
+    _vision_eval_rows = [
+        r for r in vision_rows
+        if isinstance(r.get("dataset_idx"), int) and r.get("dataset_idx") in _eval_conv_set
+    ]
+    vision_train_rows = [
+        r for r in vision_rows
+        if not (isinstance(r.get("dataset_idx"), int) and r.get("dataset_idx") in _eval_conv_set)
+    ]
+
+    # Gabungkan vision (HF + synthetic) dan teks (HF + synthetic + SEA-Instruct)
+    all_vision_train_rows = vision_train_rows + synth_vision_rows
+    all_text_rows = text_rows + synth_text_rows + sea_rows
+
     print(f"  ✅ Hold-out eval vision: {_n_eval_conv}/{len(_conv_ids)} percakapan "
-          f"({len(_vision_eval_rows)} turn-rows eval / {len(vision_train_rows)} turn-rows train)")
+          f"({len(_vision_eval_rows)} turn-rows eval / {len(all_vision_train_rows)} turn-rows train)")
 
-    # ---- 4. JOINT MIXING ----
-    _actual_ratio = len(text_rows) / max(1, len(text_rows) + len(vision_train_rows))
-    print(f"  📊 Joint Mixing (100% Data): vision={len(vision_train_rows)} | teks={len(text_rows)} "
-          f"| total={len(vision_train_rows) + len(text_rows)} (rasio teks aktual={_actual_ratio:.2f})")
+    # ---- 6. JOINT MIXING ----
+    _total_samples = len(all_text_rows) + len(all_vision_train_rows)
+    _actual_ratio = len(all_text_rows) / max(1, _total_samples)
+    print(f"  📊 Joint Mixing (100% Data): vision={len(all_vision_train_rows)} (HF={len(vision_train_rows)}, Synth={len(synth_vision_rows)}) "
+          f"| teks={len(all_text_rows)} (HF={len(text_rows)}, Synth={len(synth_text_rows)}, SEA={len(sea_rows)}) "
+          f"| total={_total_samples} (rasio teks={_actual_ratio:.2f})")
 
-    joint_rows = vision_train_rows + text_rows
+    joint_rows = all_vision_train_rows + all_text_rows
     random.seed(SEED)
     random.shuffle(joint_rows)
 
-    # ---- 5. EVAL SETS ----
+    # ---- 7. EVAL SETS ----
     joint_eval_multimodal = Dataset.from_list(_vision_eval_rows, on_mixed_types="use_json") if _vision_eval_rows else None
 
     _eval_text_rows = []

@@ -4273,7 +4273,7 @@ def _(
         )
     else:
         import unsloth_zoo.saving_utils
-        unsloth_zoo.saving_utils.assert_same_keys = lambda *args, **kwargs: None  # type: ignore
+        setattr(unsloth_zoo.saving_utils, "assert_same_keys", lambda *args, **kwargs: None)
 
         # --- Workaround: unsloth_zoo `_infer_prefix_and_remap` UnboundLocalError ---
         # Versi unsloth_zoo yang terinstal tidak menginisialisasi `unmatched_keys = []`
