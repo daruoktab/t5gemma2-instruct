@@ -1,0 +1,5 @@
+[project]
+name = "t5gemma2-instruct"
+version = "0.8.0"
+requires-python = ">=3.10"
+dependencies = []

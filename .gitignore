@@ -38,3 +38,21 @@ opencode*.json
 
 # Knowledge graph output
 graphify-out/
+
+# Local workspace & temp
+.zcode/
+load.env.ps1
+*.bak
+*.bak_*
+*.img_bak
+test_*.jsonl
+*.tmp*
+
+# Data repo staging & large local outputs
+/data_repo/
+/data/synthetic/
+/mcpb/generate-conv-indonesia/data/
+/mcpb/generate-conv-indonesia/output_dataset/
+/mcpb/generate-conv-indonesia/generated_conv_agent.jsonl
+dataset_conversations_*.jsonl
+dataset_output.jsonl
