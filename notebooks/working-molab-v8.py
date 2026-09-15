@@ -1,29 +1,31 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.13,<3.14"
 # dependencies = [
-#     "accelerate==1.14.0",
+#     "accelerate==1.15.0",
 #     "absl-py==2.4.0",
-#     "bitsandbytes==0.50.1",
+#     "bitsandbytes==0.50.2",
 #     "datasets==5.0.1",
 #     "evaluate==0.4.6",
+#     "fsspec==2026.6.0",
 #     "rouge-score==0.1.2",
-#     "sacrebleu",
+#     "sacrebleu==2.6.0",
 #     "bert_score==0.3.13",
 #     "nltk==3.10.3",
 #     "hf-transfer==0.1.9",
-#     "huggingface-hub==1.27.0",
-#     "marimo==0.23.16",
-#     "numpy==2.5.1",
+#     "huggingface-hub==1.31.0",
+#     "marimo==0.24.2",
+#     "numpy==2.5.3",
 #     "peft==0.20.0",
 #     "pillow==12.3.0",
 #     "pymupdf==1.28.2",
 #     "pytorch-optimizer==3.10.1",
-#     "torch==2.12.1",
-#     "torchvision==0.27.1",
-#     "trl==1.10.0",
-#     "transformers==5.15.0",
-#     "unsloth_zoo @ git+https://github.com/daruoktab/unsloth-zoo.git",
-#     "unsloth @ git+https://github.com/daruoktab/unsloth.git",
+#     "torch==2.14.0",
+#     "torchvision==0.29.0",
+#     "trl==1.13.0",
+#     "transformers==5.17.0",
+#     "optimum==2.3.0",
+#     "unsloth_zoo @ git+https://github.com/daruoktab/unsloth-zoo.git@9a44e54f3fd8878cee0cc9d062513f084cca1bf3",
+#     "unsloth @ git+https://github.com/daruoktab/unsloth.git@da2bc8e841977276655bb8530405200f8128f2b6",
 # ]
 # ///
 #
@@ -48,7 +50,7 @@
 
 import marimo
 
-__generated_with = "0.23.16"
+__generated_with = "0.24.2"
 app = marimo.App(
     width="full",
     css_file="/usr/local/_marimo/custom.css",
@@ -69,8 +71,12 @@ def _():
     # 1A. REPO & MODEL SOURCES
     # =====================================================================
     UNIFIED_HF_REPO = "daruokta/t5gemma-2-4b-4b-instruct-chat-indo-v8"
-    DATASET_TEXT_REPO = "daruokta/t5gemma2-indonesia-chat-formatted"
-    DATASET_VISION_REPO = "daruokta/t5gemma2-indonesia-vision-formatted"
+    # Mono-repo training. Config ORPO belum memiliki file (per 2026-09-13),
+    # jadi RUN_ORPO=False menyimpan hasil SFT untuk dilanjutkan nanti.
+    DATASET_TEXT_REPO = "daruokta/t5gemma2-indonesia-instruct-v1"
+    DATASET_VISION_REPO = "daruokta/t5gemma2-indonesia-instruct-v1"
+    DATASET_TEXT_ORPO_REPO = "daruokta/t5gemma2-indonesia-instruct-v1"
+    DATASET_VISION_ORPO_REPO = "daruokta/t5gemma2-indonesia-instruct-v1"
 
     BASE_T5_MODEL = "google/t5gemma-2-4b-4b"
     GEMMA_BASE_MODEL = "google/gemma-3-4b-pt"
@@ -91,7 +97,7 @@ def _():
     STEERING_FORCE = False        # True = steer ulang walau steered/ sudah ada di repo
     CANGKOK_FORCE = False         # True = graft ulang walau cangkok/ sudah ada di repo
     RUN_SFT = True                # False = skip Phase 1 (langsung cek ORPO/merge)
-    RUN_ORPO = True               # False = stop setelah SFT
+    RUN_ORPO = False              # Cicil: pause setelah SFT; ubah True saat config ORPO tersedia
 
     # =====================================================================
     # 1C. V8 SOTA RESEARCH PARAMETERS: DEVEC SVD STEERING (arXiv:2512.22511)
@@ -118,11 +124,12 @@ def _():
     # =====================================================================
     TEXT_CHAT_CONFIG = "chat_sft"
     TEXT_INDOQA_CONFIG = "indoqa_sft"
+    TEXT_SEA_CONFIG = "sea_general_sft"
     TEXT_ORPO_CONFIG = "chat_orpo"
     VISION_SFT_CONFIG = "vision_sft"
     VISION_ORPO_CONFIG = "vision_orpo"
 
-    DATASET_SEA_INSTRUCT_REPO = "aisingapore/SEA-Instruct-2602"
+    DATASET_SEA_INSTRUCT_REPO = DATASET_TEXT_REPO
     LOCAL_SYNTHETIC_DATA_PATH = "data/synthetic/generated_conv_agent.jsonl"
 
     ENABLE_MTO_PREFIX = True      # Multi-task prefix routing (<unused1>..<unused6>)
@@ -133,16 +140,18 @@ def _():
     SAMPLE_TRAIN_VISION_SFT = 0
     SAMPLE_TRAIN_VISION_ORPO = 0
 
-    ENABLE_LOCAL_SYNTHETIC = True # True = muat percakapan sintetis lokal (generated_conv_agent.jsonl) bila ada
+    # chat_sft mono-repo sudah mencakup 2K percakapan sintetis teks; vision
+    # sintetis yang lama telah dideduplikasi saat membangun vision_sft.
+    ENABLE_LOCAL_SYNTHETIC = False
     SAMPLE_LOCAL_SYNTHETIC = 0    # 0 = muat seluruh data lokal (2K text + 1K vision)
 
-    ENABLE_SEA_INSTRUCT = True    # True = muat sampel berkualitas dari aisingapore/SEA-Instruct-2602
+    ENABLE_SEA_INSTRUCT = True    # True = sampling config sea_general_sft dari mono-repo
     SAMPLE_SEA_INSTRUCT = 10000   # Kuota sample SEA-Instruct (misal 10.000; 0 = nonaktifkan)
-    SEA_INSTRUCT_MIN_QUALITY = "Excellent" # Filter kualitas prompt SEA-Instruct ("Excellent", "Good", atau "all")
+    SEA_INSTRUCT_MIN_QUALITY = "Excellent" # Dipakai hanya bila loader diarahkan ke sumber SEA-Instruct mentah
 
-    VISION_TEST_SIZE = 0.05       # hold-out PERCAKAPAN vision utuh untuk eval-mm (95/5 di level conv)
-    MAX_EVAL_TEXT_SAMPLES = 200   # cap eval teks per-step (deterministik, group-aware per chat_idx)
-    MAX_EVAL_GEN_SAMPLES = 20     # cap sample kualitatif per eval-kind
+    # Seluruh split validation resmi dipakai untuk loss evaluation. Generation
+    # evaluation memakai subset kecil agar tidak menggandakan biaya eval penuh.
+    MAX_EVAL_GEN_SAMPLES = 100    # per sumber: vision, chat, IndoQA, dan SEA
 
     # =====================================================================
     # 1E. SFT HYPERPARAMS (Phase 1 - Joint)
@@ -170,7 +179,6 @@ def _():
     SFT_LABEL_SMOOTHING_FACTOR = 0.1
     SFT_NEFTUNE_NOISE_ALPHA = 5.0
     SFT_MAX_GRAD_NORM = 5.0
-    SFT_PREDICT_WITH_GENERATE = True
 
     # Split-LR multiplier per param group (relatif terhadap SFT_LEARNING_RATE)
     SFT_LR_MULT_ENCODER = 0.2
@@ -267,7 +275,9 @@ def _():
         DATALOADER_NUM_WORKERS,
         DATALOADER_PREFETCH_FACTOR,
         DATASET_SEA_INSTRUCT_REPO,
+        DATASET_TEXT_ORPO_REPO,
         DATASET_TEXT_REPO,
+        DATASET_VISION_ORPO_REPO,
         DATASET_VISION_REPO,
         DEVEC_SVD_TAU,
         ENABLE_DEVEC_STEERING,
@@ -295,7 +305,6 @@ def _():
         LORA_RANK,
         LORA_USE_RSLORA,
         MAX_EVAL_GEN_SAMPLES,
-        MAX_EVAL_TEXT_SAMPLES,
         MAX_SOURCE_LENGTH,
         MAX_TARGET_LENGTH,
         OPTIMIZER_TYPE,
@@ -353,7 +362,6 @@ def _():
         SFT_ORSCALE_SCALE,
         SFT_PER_DEVICE_EVAL_BATCH_SIZE,
         SFT_PER_DEVICE_TRAIN_BATCH_SIZE,
-        SFT_PREDICT_WITH_GENERATE,
         SFT_SAVE_EVAL_STEPS,
         SFT_SAVE_TOTAL_LIMIT,
         SFT_WARMUP_STEPS,
@@ -373,13 +381,13 @@ def _():
         TEXT_CHAT_CONFIG,
         TEXT_INDOQA_CONFIG,
         TEXT_ORPO_CONFIG,
+        TEXT_SEA_CONFIG,
         TLPO_CLIP_EPS,
         TLPO_LAMBDA,
         TORCH_EMPTY_CACHE_STEPS,
         UNIFIED_HF_REPO,
         VISION_ORPO_CONFIG,
         VISION_SFT_CONFIG,
-        VISION_TEST_SIZE,
     )
 
 
@@ -396,7 +404,10 @@ def _(mo):
 
 
 @app.cell
-def _(hf_token_widget, mo, os):
+def _(environment_ready, hf_token_widget, mo, os):
+    if not environment_ready:
+        raise RuntimeError("Environment dependency belum selesai dipasang.")
+
     from huggingface_hub import login
 
     _val = hf_token_widget.value.strip() if hf_token_widget.value else ""
@@ -445,79 +456,124 @@ def _(hf_token_widget, mo, os):
 
 @app.cell
 def _():
+    import importlib
+    import shutil
     import subprocess
     import sys
+    from importlib.metadata import PackageNotFoundError, version
 
-    # Auto-install dependencies utama jika belum ada di env Molab
-    try:
-        import unsloth
-        import datasets
-        import peft
-        print("✅ Dependencies utama sudah ter-install.")
-    except ImportError:
-        print("📦 Meng-install dependencies di Molab...")
+    print(f"🔧 [BOOTSTRAP] Menyiapkan environment v8 dengan Python: {sys.executable}")
+
+    _uv_executable = shutil.which("uv")
+    if _uv_executable:
+        # Targetkan interpreter notebook secara eksplisit; jangan bergantung pada
+        # virtualenv mana yang kebetulan aktif di shell Molab.
+        _pip_install = [_uv_executable, "pip", "install", "--python", sys.executable]
+        if sys.prefix == sys.base_prefix:
+            _pip_install.append("--system")
+    else:
+        print("⚠️ `uv` tidak ditemukan; fallback ke python -m pip.")
+        _pip_install = [sys.executable, "-m", "pip", "install"]
+
+    def _installed_version(package_name: str) -> str:
+        try:
+            return version(package_name)
+        except PackageNotFoundError:
+            return "missing"
+
+    # Torch dipasang lebih dulu agar resolver Unsloth tidak mengambil build CUDA
+    # lain, dan paket yang benar-benar belum ada tidak gagal pada version().
+    _torch_actual = _installed_version("torch")
+    _torchvision_actual = _installed_version("torchvision")
+    _torch_ok = _torch_actual.startswith("2.14.0+cu132")
+    _torchvision_ok = _torchvision_actual.startswith("0.29.0+cu132")
+    if not (_torch_ok and _torchvision_ok):
+        print(
+            "📦 Memasang PyTorch/torchvision cu132 "
+            f"(sekarang torch={_torch_actual}, torchvision={_torchvision_actual})..."
+        )
         subprocess.run(
             [
-                "uv", "pip", "install",
-                "accelerate==1.14.0",
-                "absl-py==2.4.0",
-                "bitsandbytes==0.50.1",
-                "datasets==5.0.1",
-                "evaluate==0.4.6",
-                "rouge-score==0.1.2",
-                "sacrebleu",
-                "bert_score==0.3.13",
-                "nltk==3.10.3",
-                "hf-transfer==0.1.9",
-                "huggingface-hub==1.27.0",
-                "marimo==0.23.16",
-                "numpy==2.5.1",
-                "peft==0.20.0",
-                "pillow==12.3.0",
-                "pymupdf==1.28.2",
-                "pytorch-optimizer==3.10.1",
-                "trl==1.10.0",
-                "transformers==5.15.0",
-                "unsloth_zoo @ git+https://github.com/daruoktab/unsloth-zoo.git",
-                "unsloth @ git+https://github.com/daruoktab/unsloth.git",
+                *_pip_install,
+                "torch==2.14.0", "torchvision==0.29.0",
+                "--index-url", "https://download.pytorch.org/whl/cu132",
+                "-U", "--force-reinstall",
             ],
-            check=True
+            check=True,
+        )
+        importlib.invalidate_caches()
+    else:
+        print("✅ PyTorch/torchvision cu132 sudah sesuai.")
+
+    _requirements = {
+        "accelerate": "accelerate==1.15.0",
+        "absl-py": "absl-py==2.4.0",
+        "bitsandbytes": "bitsandbytes==0.50.2",
+        "datasets": "datasets==5.0.1",
+        "evaluate": "evaluate==0.4.6",
+        "fsspec": "fsspec==2026.6.0",
+        "rouge-score": "rouge-score==0.1.2",
+        "sacrebleu": "sacrebleu==2.6.0",
+        "bert-score": "bert_score==0.3.13",
+        "nltk": "nltk==3.10.3",
+        "hf-transfer": "hf-transfer==0.1.9",
+        "huggingface-hub": "huggingface-hub==1.31.0",
+        "marimo": "marimo==0.24.2",
+        "numpy": "numpy==2.5.3",
+        "peft": "peft==0.20.0",
+        "pillow": "pillow==12.3.0",
+        "pymupdf": "pymupdf==1.28.2",
+        "pytorch-optimizer": "pytorch-optimizer==3.10.1",
+        "trl": "trl==1.13.0",
+        "transformers": "transformers==5.17.0",
+        "optimum": "optimum==2.3.0",
+        "unsloth-zoo": "unsloth_zoo @ git+https://github.com/daruoktab/unsloth-zoo.git@9a44e54f3fd8878cee0cc9d062513f084cca1bf3",
+        "unsloth": "unsloth @ git+https://github.com/daruoktab/unsloth.git@da2bc8e841977276655bb8530405200f8128f2b6",
+    }
+    _expected_versions = {
+        _name: _spec.split("==", 1)[1]
+        for _name, _spec in _requirements.items()
+        if "==" in _spec
+    }
+    _expected_versions.update({"unsloth-zoo": "2026.9.3", "unsloth": "2026.9.4"})
+    _version_mismatches = {
+        _package: (_expected, _installed_version(_package))
+        for _package, _expected in _expected_versions.items()
+        if _installed_version(_package) != _expected
+    }
+
+    if _version_mismatches:
+        print(f"📦 Menyinkronkan dependencies Molab: {_version_mismatches}")
+        subprocess.run([*_pip_install, "-U", *_requirements.values()], check=True)
+        importlib.invalidate_caches()
+    else:
+        print("✅ Dependencies utama sudah sesuai pin v8.")
+
+    _remaining_mismatches = {
+        _package: (_expected, _installed_version(_package))
+        for _package, _expected in _expected_versions.items()
+        if _installed_version(_package) != _expected
+    }
+    if _remaining_mismatches:
+        raise RuntimeError(
+            "Instalasi dependency selesai tetapi versi berikut belum sesuai: "
+            f"{_remaining_mismatches}"
         )
 
-    # Force update PyTorch, torchvision ke CUDA 13.2 (cu132)
-    print("📦 Force update PyTorch, torchvision (cu132)...")
-    subprocess.run(
-        [
-            "uv", "pip", "install",
-            "torch", "torchvision",
-            "--index-url", "https://download.pytorch.org/whl/cu132",
-            "-U", "--force-reinstall",
-        ],
-        check=True
-    )
-
-    # Force install/update flash_attn prebuild wheel (cu132 torch2.13 cp313)
-    print("📦 Meng-install/update flash_attn prebuild wheel (v0.9.47 cu132 torch2.13)...")
-    subprocess.run(
-        [
-            "uv", "pip", "install", "-U",
-            "flash_attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.47/flash_attn-2.8.3+cu132torch2.13-cp313-cp313-linux_x86_64.whl",
-        ],
-        check=True,
-    )
-
-    # Print verifikasi versi Environment & Library
+    # T5Gemma2ForConditionalGeneration belum mendukung Flash Attention 3.
+    # Gunakan SDPA bawaan PyTorch secara eksplisit di seluruh model load.
     import torch as _torch
-    import flash_attn as _flash_attn
 
     print("=" * 60)
     print("📌 VERIFIKASI ENVIRONMENT & LIBRARY VERSIONS:")
     print(f"   • Python version    : {sys.version.split()[0]}")
     print(f"   • PyTorch version   : {_torch.__version__} (CUDA build: {_torch.version.cuda})")
     print(f"   • CUDA Available    : {_torch.cuda.is_available()}")
-    print(f"   • flash_attn version: {getattr(_flash_attn, '__version__', 'Installed')}")
+    print("   • Attention backend : sdpa")
     print("=" * 60)
-    return
+
+    environment_ready = True
+    return (environment_ready,)
 
 
 @app.cell(hide_code=True)
@@ -545,7 +601,10 @@ def _(mo):
 
 
 @app.cell
-def _():
+def _(environment_ready):
+    if not environment_ready:
+        raise RuntimeError("Bootstrap environment v8 belum selesai.")
+
     import os
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["TORCH_COMPILE_DISABLE"] = "1"
@@ -842,9 +901,9 @@ def _(torch):
             if isinstance(model_output, dict) and "logits" in model_output:
                 logits = model_output["logits"]
             elif isinstance(model_output, tuple):
-                logits = (
-                    model_output[1] if len(model_output) > 1 else model_output[0].logits
-                )
+                logits = model_output[0]
+                if logits.ndim == 0:  # (loss, logits, ...) versus (logits, ...)
+                    logits = model_output[1]
             else:
                 logits = model_output.logits
 
@@ -853,18 +912,20 @@ def _(torch):
                 labels = labels[..., 1:].contiguous()
 
             vocab_size = logits.size(-1)
-            suppress_list = [i for i in self.suppress_ids if i < vocab_size]
+            suppress_list = [i for i in self.suppress_ids if 0 <= i < vocab_size]
 
             valid_mask = torch.ones(vocab_size, dtype=torch.bool, device=logits.device)
             valid_mask[suppress_list] = False
             num_valid_tokens = valid_mask.sum().item()
+            if num_valid_tokens == 0:
+                raise ValueError("Label smoothing requires at least one allowed token.")
 
-            flat_logits = logits.view(-1, vocab_size)
-            flat_labels = labels.view(-1)
+            flat_logits = logits.reshape(-1, vocab_size)
+            flat_labels = labels.reshape(-1)
 
             active_mask = flat_labels != -100
             if active_mask.sum() == 0:
-                return torch.tensor(0.0, device=logits.device, requires_grad=True)
+                raise ValueError("SFT batch has no supervised tokens (all labels are -100).")
 
             active_logits = flat_logits[active_mask]
             active_labels = flat_labels[active_mask]
@@ -878,13 +939,13 @@ def _(torch):
                 chunk_logits = active_logits[i : i + chunk_size]
                 chunk_labels = active_labels[i : i + chunk_size]
 
-                log_probs = torch.nn.functional.log_softmax(chunk_logits, dim=-1)
+                log_probs = torch.nn.functional.log_softmax(chunk_logits, dim=-1, dtype=torch.float32)
 
                 nll_loss = -log_probs.gather(
                     dim=-1, index=chunk_labels.unsqueeze(-1)
                 ).squeeze(-1)
 
-                valid_log_probs = log_probs * valid_mask.to(log_probs.dtype)
+                valid_log_probs = log_probs.masked_fill(~valid_mask, 0.0)
                 smooth_loss = -valid_log_probs.sum(dim=-1) / num_valid_tokens
 
                 token_losses = (1.0 - self.epsilon) * nll_loss + self.epsilon * smooth_loss
@@ -1016,7 +1077,8 @@ def _(torch):
         norm = X.norm() + eps
         X = X / norm
 
-        if X.size(0) < X.size(1):
+        # Form the Gram matrix on the smaller axis (important for LoRA rank << width).
+        if X.size(0) > X.size(1):
             X = X.T
 
         for _ in range(steps):
@@ -1024,7 +1086,7 @@ def _(torch):
             B = b * A + c * (A @ A)
             X = a * X + B @ X
 
-        if G.size(0) < G.size(1):
+        if G.size(0) > G.size(1):
             X = X.T
 
         if apply_shape_scale:
@@ -1143,15 +1205,21 @@ def _(torch):
                         # Direction D_l = wd * W + s_l * Q
                         D_l = (weight_decay * p) + (s_l * Q)
 
-                        # Lazy Calibration constant c_denom at t=1
-                        p_norm = p.norm(p="fro")
-                        D_norm = D_l.norm(p="fro") + 1e-6
-                        if state["c_denom"] is None:
+                        # Zero-initialized LoRA B cannot calibrate a trust ratio yet.
+                        # Also repair zero/invalid constants from older checkpoints.
+                        p_norm = p.float().norm(p="fro")
+                        D_norm = D_l.float().norm(p="fro") + 1e-6
+                        calibration = state.get("c_denom")
+                        if calibration is not None and (not _math.isfinite(calibration) or calibration <= 0):
+                            state["c_denom"] = None
+                        if state["c_denom"] is None and p_norm > 1e-6 and g_update.float().norm() > 1e-6:
                             state["c_denom"] = (p_norm / D_norm).item()
 
-                        # Trust ratio scaling
-                        r_raw = p_norm / (state["c_denom"] * D_norm + 1e-6)
-                        r_hat = torch.clamp(r_raw, r_min, r_max)
+                        if state["c_denom"] is None:
+                            r_hat = 1.0  # Bootstrap a nonzero weight before calibration.
+                        else:
+                            r_raw = p_norm / (state["c_denom"] * D_norm + 1e-6)
+                            r_hat = torch.clamp(r_raw, r_min, r_max).item()
 
                         # Parameter update: W_{t+1} = W_t - lr * r_hat * D_l
                         p.data.add_(D_l.to(p.dtype), alpha=-lr * r_hat)
@@ -1527,7 +1595,7 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
         Muat percakapan sintetis lokal (generated_conv_agent.jsonl).
         Unroll per giliran asisten untuk teks dan visual.
         """
-        import json as _json
+        import json as _local_json
         import os as _os
         from PIL import Image as _PILImage
 
@@ -1552,7 +1620,7 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
 
         for line_idx, line in enumerate(lines):
             try:
-                obj = _json.loads(line)
+                obj = _local_json.loads(line)
             except Exception:
                 continue
 
@@ -1678,28 +1746,31 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
         return synth_text_rows, synth_vision_rows
 
     def load_sea_instruct_samples(
-        repo_id: str = "aisingapore/SEA-Instruct-2602",
-        config_name: str = "Indonesian",
-        n_samples: int = 10000,
+        repo_id: str = "daruokta/t5gemma2-indonesia-instruct-v1",
+        config_name: str = "sea_general_sft",
+        n_samples: int | None = 10000,
         min_quality: str = "Excellent",
         enable_mto: bool = True,
         processor = None,
         seed: int = 42,
+        split: str = "train",
     ) -> list[dict]:
         """
-        Streaming loader untuk dataset aisingapore/SEA-Instruct-2602 (Indonesian).
-        Mengonversi percakapan ke format joint SFT dengan task routing MTO.
+        Streaming loader untuk config sea_general_sft mono-repo maupun sumber mentah
+        SEA-Instruct-2602. Mengonversi setiap turn ke format joint SFT dengan MTO.
         """
         import ast as _ast
-        import json as _json
+        import json as _sea_json
 
-        if n_samples <= 0:
+        if n_samples is not None and n_samples <= 0:
             return []
 
-        print(f"[SEA-INSTRUCT] Streaming {n_samples} sampel berkualitas ({min_quality}) dari {repo_id} ({config_name})...")
+        _limit_label = "seluruh row" if n_samples is None else f"hingga {n_samples} row"
+        print(f"[SEA-INSTRUCT] Streaming {_limit_label} split {split} dari {repo_id} ({config_name})...")
         try:
-            ds = load_dataset(repo_id, config_name, split="train", streaming=True)
-            ds = ds.shuffle(seed=seed, buffer_size=10000)
+            ds = load_dataset(repo_id, config_name, split=split, streaming=True)
+            if n_samples is not None:
+                ds = ds.shuffle(seed=seed, buffer_size=10000)
         except Exception as e:
             print(f"  ⚠️ [SEA-INSTRUCT] Gagal menginisiasi stream: {e}")
             return []
@@ -1707,12 +1778,18 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
         task_tag_mapping = {
             "Summarization": "summarize",
             "Translation": "translate",
+            "Translation_and_Code_Switching": "translate",
             "Information_Extraction": "ner",
             "Math_and_Scientific_Problem_Solving": "qa",
             "Reasoning": "qa",
+            "Reasoning_and_Explanation": "qa",
             "Coding_and_Debugging": "qa",
+            "Programming_and_Code": "qa",
             "Question_Answering": "qa",
+            "Factual_Question_Answering": "qa",
+            "Classification_and_Moderation": "qa",
             "Paraphrase": "paraphrase",
+            "Text_Editing_and_Improvement": "paraphrase",
             "Creative_Writing_and_Generation": "general_chat",
             "Recommendation_and_Advice": "general_chat",
         }
@@ -1721,9 +1798,30 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
         count = 0
 
         for sample in ds:
-            if count >= n_samples:
+            if n_samples is not None and count >= n_samples:
                 break
 
+            # Mono-repo sudah difilter dan di-unroll menjadi input/target per turn.
+            if sample.get("input") and sample.get("target"):
+                primary_task = sample.get("task", "general_chat")
+                mapped_task = task_tag_mapping.get(primary_task, "general_chat")
+                target_text = sample["target"].strip()
+                if enable_mto:
+                    target_text = format_mto_target(target_text, mapped_task)
+                sea_rows.append({
+                    "prompt_text": format_mto_encoder_input(sample["input"], mapped_task),
+                    "target_text": target_text,
+                    "dataset_idx": -1,
+                    "image_indices": [],
+                    "images": [],
+                    "_modality": "text",
+                    "_source": sample.get("source", "sea_general_sft"),
+                    "_conv_id": f"sea_{sample.get('chat_idx', count)}",
+                })
+                count += 1
+                continue
+
+            # Kompatibilitas dengan sumber mentah aisingapore/SEA-Instruct-2602.
             if min_quality and min_quality.lower() != "all":
                 if sample.get("prompt_input_quality") != min_quality:
                     continue
@@ -1737,7 +1835,7 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
             try:
                 if isinstance(raw_conv, str):
                     try:
-                        conv_list = _json.loads(raw_conv)
+                        conv_list = _sea_json.loads(raw_conv)
                     except Exception:
                         conv_list = _ast.literal_eval(raw_conv)
                 else:
@@ -1789,10 +1887,10 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
                     "_conv_id": f"sea_{sample.get('conversations_id', str(count))[:16]}",
                 })
                 count += 1
-                if count >= n_samples:
+                if n_samples is not None and count >= n_samples:
                     break
 
-        print(f"  ✅ [SEA-INSTRUCT] Berhasil memuat {len(sea_rows)} rows SFT.")
+        print(f"  ✅ [SEA-INSTRUCT] Berhasil memuat {len(sea_rows)} rows SFT dari split {split}.")
         return sea_rows
 
     return (
@@ -1808,7 +1906,7 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
 def _(BASE_T5_MODEL, os):
     import hashlib as _hashlib
     import io as _io
-    import json as _json
+    import json as _metadata_json
     from datetime import datetime as _dt
     from datetime import timezone as _tz
 
@@ -1886,7 +1984,7 @@ def _(BASE_T5_MODEL, os):
         return _fixes
 
     def _marker_sha(marker: dict) -> str:
-        return _hashlib.sha256(_json.dumps(marker, sort_keys=True).encode()).hexdigest()
+        return _hashlib.sha256(_metadata_json.dumps(marker, sort_keys=True).encode()).hexdigest()
 
     def remote_marker(repo_id: str, prefix: str, token=None):
         from huggingface_hub import hf_hub_download
@@ -1898,7 +1996,7 @@ def _(BASE_T5_MODEL, os):
                 token=token,
             )
             with open(_p, "r", encoding="utf-8") as _f:
-                return _json.load(_f)
+                return _metadata_json.load(_f)
         except Exception:
             return None
 
@@ -1906,7 +2004,7 @@ def _(BASE_T5_MODEL, os):
         os.makedirs(local_dir, exist_ok=True)
         prov = {"marker_sha": _marker_sha(marker)} if marker else {"marker_sha": "legacy"}
         with open(os.path.join(local_dir, "_hf_provenance.json"), "w", encoding="utf-8") as _f:
-            _json.dump(prov, _f, indent=2)
+            _metadata_json.dump(prov, _f, indent=2)
 
     def local_provenance_valid(local_dir: str, marker) -> bool:
         _pf = os.path.join(local_dir, "_hf_provenance.json")
@@ -1914,7 +2012,7 @@ def _(BASE_T5_MODEL, os):
             return False
         try:
             with open(_pf, "r", encoding="utf-8") as _f:
-                prov = _json.load(_f)
+                prov = _metadata_json.load(_f)
         except Exception:
             return False
         if marker is None:
@@ -1969,11 +2067,9 @@ def _(BASE_T5_MODEL, os):
             if _missing:
                 raise RuntimeError(f"{len(_missing)}/{len(local_files)} file TIDAK ter-upload: {_missing[:5]}")
         except Exception as _e_up:
-            print(f"  ⚠️ Upload gagal/parsial ({_e_up}) — membersihkan '{path_in_repo}' di remote...")
-            try:
-                delete_remote_prefix(api, repo_id, path_in_repo)
-            except Exception as _e_clean:
-                print(f"  ⚠️ Cleanup remote gagal: {_e_clean}")
+            # A retry may target an existing valid checkpoint. Never delete that
+            # checkpoint just because a network request or verification failed.
+            print(f"  ⚠️ Upload/verification gagal ({_e_up}); remote '{path_in_repo}' dipertahankan untuk pemeriksaan.")
             raise
 
         _marker = {
@@ -1984,7 +2080,7 @@ def _(BASE_T5_MODEL, os):
             "timestamp": _dt.now(_tz.utc).isoformat(),
         }
         api.upload_file(
-            path_or_fileobj=_io.BytesIO(_json.dumps(_marker, indent=2).encode()),
+            path_or_fileobj=_io.BytesIO(_metadata_json.dumps(_marker, indent=2).encode()),
             path_in_repo=f"{path_in_repo}/{UPLOAD_MARKER}",
             repo_id=repo_id,
             repo_type="model",
@@ -2054,6 +2150,7 @@ def _(
     ENABLE_STEERING,
     FINAL_PREFIX,
     JOINT_PREFIX,
+    RUN_ORPO,
     STEERED_SUBFOLDER,
     STEERING_FORCE,
     UNIFIED_HF_REPO,
@@ -2128,6 +2225,10 @@ def _(
         "merge": "Final Merge",
         "done": "✅ SEMUA SELESAI",
     }
+    _active_label = _labels[pipeline_stage]
+    if sft_done and not orpo_done and not RUN_ORPO:
+        _active_label = "⏸️ Dijeda setelah SFT; aktifkan RUN_ORPO saat dataset tersedia"
+
     print("=" * 70)
     print(f"📊 PIPELINE STATE REPORT V8 — {UNIFIED_HF_REPO}")
     print(f"   • steered/ exists : {steered_exists}")
@@ -2135,11 +2236,11 @@ def _(
     print(f"   • SFT final_adapter: {sft_done} (resume={sft_resume})")
     print(f"   • ORPO final_adapter: {orpo_done} (resume={orpo_resume})")
     print(f"   • Final Merged BF16: {final_done}")
-    print(f"   👉 Current Active Stage: {_labels[pipeline_stage]}")
+    print(f"   👉 Current Active Stage: {_active_label}")
     print("=" * 70)
 
     mo.md(
-        f"**📍 Pipeline Status V8:** `{pipeline_stage}` ({_labels[pipeline_stage]}) | "
+        f"**📍 Pipeline Status V8:** `{pipeline_stage}` ({_active_label}) | "
         f"Cangkok: `{cangkok_exists}` | SFT done: `{sft_done}` | ORPO done: `{orpo_done}`"
     )
     return (
@@ -2421,10 +2522,10 @@ def _(
                 assert _steer_tok is not None, "Tokenizer failed to load"
                 _steer_tok.save_pretrained(_local)
 
-                import json as _json
+                import json as _steer_json
                 _tc_path = os.path.join(_local, "tokenizer_config.json")
                 with open(_tc_path, "r", encoding="utf-8") as _f:
-                    _tc = _json.load(_f)
+                    _tc = _steer_json.load(_f)
                 _tc.setdefault("task_prefix_mapping", {
                     "<unused1>": "summarize",
                     "<unused2>": "translate",
@@ -2434,7 +2535,7 @@ def _(
                     "<unused6>": "general_chat",
                 })
                 with open(_tc_path, "w", encoding="utf-8") as _f:
-                    _json.dump(_tc, _f, indent=2, ensure_ascii=False)
+                    _steer_json.dump(_tc, _f, indent=2, ensure_ascii=False)
 
                 print(f"  Uploading ke {UNIFIED_HF_REPO}/{STEERED_SUBFOLDER} (verified-atomic)...")
                 from huggingface_hub import HfApi as _SteerApi
@@ -2607,10 +2708,10 @@ def _(
             _processor_orig = _GraftProc.from_pretrained(BASE_T5_MODEL, token=_token)
             _processor_orig.save_pretrained(_local_save)
 
-            import json as _json
+            import json as _graft_json
             _tc_path = os.path.join(_local_save, "tokenizer_config.json")
             with open(_tc_path, "r", encoding="utf-8") as _f:
-                _tc = _json.load(_f)
+                _tc = _graft_json.load(_f)
             _tc.setdefault("task_prefix_mapping", {
                 "<unused1>": "summarize",
                 "<unused2>": "translate",
@@ -2620,10 +2721,9 @@ def _(
                 "<unused6>": "general_chat",
             })
             with open(_tc_path, "w", encoding="utf-8") as _f:
-                _json.dump(_tc, _f, indent=2, ensure_ascii=False)
+                _graft_json.dump(_tc, _f, indent=2, ensure_ascii=False)
 
             print(f"  Uploading ke {UNIFIED_HF_REPO}/{CANGKOK_SUBFOLDER} (verified-atomic)...")
-            from huggingface_hub import HfApi as _GraftApi
             _api = _GraftApi(token=_token)
             _marker = upload_folder_atomic(
                 _api,
@@ -2674,12 +2774,16 @@ def _(
 ):
     print(f"[DATA] Memuat vision SFT dari {DATASET_VISION_REPO} ({VISION_SFT_CONFIG})...")
     vision_train_dataset = load_dataset(DATASET_VISION_REPO, VISION_SFT_CONFIG, split="train")
+    vision_validation_dataset = load_dataset(DATASET_VISION_REPO, VISION_SFT_CONFIG, split="validation")
 
     if SAMPLE_TRAIN_VISION_SFT > 0 and len(vision_train_dataset) > SAMPLE_TRAIN_VISION_SFT:
         vision_train_dataset = vision_train_dataset.shuffle(seed=SEED).select(range(SAMPLE_TRAIN_VISION_SFT))
-        print(f"  (disampel menjadi {len(vision_train_dataset)})")
-    print(f"✅ [DATA] Vision SFT: {len(vision_train_dataset)} sampel.")
-    return (vision_train_dataset,)
+        print(f"  (train disampel menjadi {len(vision_train_dataset)})")
+    print(
+        f"✅ [DATA] Vision SFT: train={len(vision_train_dataset)} percakapan | "
+        f"validation resmi={len(vision_validation_dataset)} percakapan."
+    )
+    return vision_train_dataset, vision_validation_dataset
 
 
 @app.cell
@@ -2695,6 +2799,7 @@ def _(
     LORA_RANK,
     LORA_USE_RSLORA,
     OUTPUT_DIR,
+    RUN_ORPO,
     SEED,
     UNIFIED_HF_REPO,
     apply_logit_mask,
@@ -2715,7 +2820,9 @@ def _(
     processor = None
     tokenizer = None
 
-    if orpo_done or pipeline_stage in ("done", "merge"):
+    if sft_done and not orpo_done and not RUN_ORPO and pipeline_stage == "orpo":
+        print("⏸️ [MODEL] SFT selesai dan RUN_ORPO=False; adapter SFT disimpan tanpa memuat model lagi.")
+    elif orpo_done or pipeline_stage in ("done", "merge"):
         print(f"[MODEL] Training sudah selesai (orpo_done={orpo_done}); model tidak dimuat untuk training loop.")
     elif not cangkok_ready:
         print("⏭️ [MODEL] Base model `cangkok/` belum siap. Skip loading model.")
@@ -2861,7 +2968,7 @@ def _(
     ENABLE_MTO_PREFIX,
     ENABLE_SEA_INSTRUCT,
     LOCAL_SYNTHETIC_DATA_PATH,
-    MAX_EVAL_TEXT_SAMPLES,
+    MAX_EVAL_GEN_SAMPLES,
     SAMPLE_LOCAL_SYNTHETIC,
     SAMPLE_SEA_INSTRUCT,
     SAMPLE_TRAIN_CHAT,
@@ -2870,7 +2977,7 @@ def _(
     SEED,
     TEXT_CHAT_CONFIG,
     TEXT_INDOQA_CONFIG,
-    VISION_TEST_SIZE,
+    TEXT_SEA_CONFIG,
     format_mto_target,
     load_hf_samples,
     load_local_synthetic_conv,
@@ -2880,6 +2987,7 @@ def _(
     random,
     text_sft_to_joint,
     vision_train_dataset,
+    vision_validation_dataset,
 ):
     mo.stop(
         processor is None,
@@ -2887,77 +2995,102 @@ def _(
     )
     print("[JOINT-SFT] ===== Membangun dataset joint V8 (vision + teks + synthetic + SEA-Instruct) =====")
 
-    # ---- 1. Unroll HF VISION SFT ----
-    print("[JOINT-SFT] Unrolling HF vision SFT (text-only pass)...")
-    vision_rows = []
-    messages_list = vision_train_dataset["messages"]
-    _arrow_images = vision_train_dataset._data.column("images")
-    for _idx, _msgs in enumerate(messages_list):
-        _num_actual_images = len(_arrow_images[_idx])
-        _image_idx = 0
-        clean_context = []
-        for _msg in _msgs:
-            _role = _msg["role"]
-            _content = _msg["content"]
-            if _role == "user" and "📷" in _content:
-                _n_imgs = _content.count("📷")
-                _text_content = _content.replace("📷", "").strip()
-                clean_content = []
-                for _ in range(_n_imgs):
-                    if _image_idx < _num_actual_images:
-                        clean_content.append({"type": "image"})
-                        _image_idx += 1
-                if _text_content:
-                    clean_content.append({"type": "text", "text": _text_content})
-                clean_context.append({"role": _role, "content": clean_content})
-            else:
-                clean_context.append({"role": _role, "content": [{"type": "text", "text": _content}]})
+    def _unroll_vision_rows(dataset, split_name):
+        rows = []
+        # Arrow storage ignores select/shuffle indices; align it with logical rows.
+        dataset = dataset.flatten_indices()
+        messages_list = dataset["messages"]
+        arrow_images = dataset._data.column("images")
+        for dataset_idx, messages in enumerate(messages_list):
+            num_actual_images = len(arrow_images[dataset_idx])
+            image_idx = 0
+            clean_context = []
+            for message in messages:
+                role = message["role"]
+                content = message["content"]
+                if role == "user" and "📷" in content:
+                    num_images = content.count("📷")
+                    text_content = content.replace("📷", "").strip()
+                    clean_content = []
+                    for _ in range(num_images):
+                        if image_idx < num_actual_images:
+                            clean_content.append({"type": "image"})
+                            image_idx += 1
+                    if text_content:
+                        clean_content.append({"type": "text", "text": text_content})
+                    clean_context.append({"role": role, "content": clean_content})
+                else:
+                    clean_context.append({"role": role, "content": [{"type": "text", "text": content}]})
 
-        for i, msg in enumerate(clean_context):
-            if msg["role"] != "assistant":
-                continue
-            context = clean_context[:i]
-            if not context:
-                continue
+            for turn_idx, message in enumerate(clean_context):
+                if message["role"] != "assistant":
+                    continue
+                context = clean_context[:turn_idx]
+                if not context:
+                    continue
 
-            prompt_text = processor.apply_chat_template(context, tokenize=False, add_generation_prompt=True)
+                prompt_text = processor.apply_chat_template(
+                    context, tokenize=False, add_generation_prompt=True
+                )
+                num_context_images = sum(
+                    1
+                    for context_message in context
+                    for block in context_message["content"]
+                    if isinstance(block, dict) and block.get("type") == "image"
+                )
+                target_text = ""
+                if isinstance(message["content"], list):
+                    for block in message["content"]:
+                        if isinstance(block, dict) and "text" in block:
+                            target_text = block["text"]
+                else:
+                    target_text = message["content"]
 
-            _num_context_images = 0
-            for _m in context:
-                for _b in _m["content"]:
-                    if isinstance(_b, dict) and _b.get("type") == "image":
-                        _num_context_images += 1
+                if target_text:
+                    if ENABLE_MTO_PREFIX:
+                        target_text = format_mto_target(target_text, "vision")
+                    rows.append({
+                        "prompt_text": prompt_text,
+                        "target_text": target_text,
+                        "dataset_idx": dataset_idx,
+                        "image_indices": list(range(num_context_images)),
+                        "images": [],
+                        "_modality": "vision",
+                        "_source": f"hf_vision_sft_{split_name}",
+                        "_vision_split": split_name,
+                    })
+        return rows
 
-            target_text = ""
-            if isinstance(msg["content"], list):
-                for b in msg["content"]:
-                    if isinstance(b, dict) and "text" in b:
-                        target_text = b["text"]
-            else:
-                target_text = msg["content"]
+    # Seluruh vision train dipakai untuk gradient; eval mengambil split validation resmi.
+    print("[JOINT-SFT] Unrolling vision train dan validation resmi...")
+    vision_train_rows = _unroll_vision_rows(vision_train_dataset, "train")
+    vision_validation_rows = _unroll_vision_rows(vision_validation_dataset, "validation")
+    print(
+        f"  ✅ Vision turn-rows: train={len(vision_train_rows)} | "
+        f"validation={len(vision_validation_rows)}"
+    )
 
-            if target_text:
-                if ENABLE_MTO_PREFIX:
-                    target_text = format_mto_target(target_text, "vision")
-                vision_rows.append({
-                    "prompt_text": prompt_text,
-                    "target_text": target_text,
-                    "dataset_idx": _idx,
-                    "image_indices": list(range(_num_context_images)),
-                    "images": [],
-                    "_modality": "vision",
-                    "_source": "hf_vision_sft",
-                })
-    print(f"  ✅ HF Vision rows (unrolled + MTO prefix): {len(vision_rows)}")
-
-    # ---- 2. HF TEKS rows (chat_sft + indoqa_sft -> joint format) ----
+    # ---- HF TEXT TRAIN ----
     print("[JOINT-SFT] Memuat HF teks train (chat_sft + indoqa_sft)...")
-    _chat_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "train", SAMPLE_TRAIN_CHAT, seed=SEED)
-    _indoqa_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "train", SAMPLE_TRAIN_INDOQA, seed=SEED)
-    text_rows = text_sft_to_joint(_chat_samples, is_chat=True, enable_mto=ENABLE_MTO_PREFIX) + text_sft_to_joint(_indoqa_samples, is_chat=False, enable_mto=ENABLE_MTO_PREFIX)
-    print(f"  ✅ HF Text rows total: {len(text_rows)} (chat={len(_chat_samples)}, indoqa={len(_indoqa_samples)})")
+    chat_train_samples = load_hf_samples(
+        DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "train", SAMPLE_TRAIN_CHAT, seed=SEED
+    )
+    indoqa_train_samples = load_hf_samples(
+        DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "train", SAMPLE_TRAIN_INDOQA, seed=SEED
+    )
+    chat_train_rows = text_sft_to_joint(
+        chat_train_samples, is_chat=True, enable_mto=ENABLE_MTO_PREFIX
+    )
+    indoqa_train_rows = text_sft_to_joint(
+        indoqa_train_samples, is_chat=False, enable_mto=ENABLE_MTO_PREFIX
+    )
+    text_rows = chat_train_rows + indoqa_train_rows
+    print(
+        f"  ✅ HF Text train rows: {len(text_rows)} "
+        f"(chat={len(chat_train_rows)}, indoqa={len(indoqa_train_rows)})"
+    )
 
-    # ---- 3. LOCAL SYNTHETIC CONVERSATIONS (generated_conv_agent.jsonl) ----
+    # ---- LOCAL SYNTHETIC ----
     synth_text_rows, synth_vision_rows = [], []
     if ENABLE_LOCAL_SYNTHETIC:
         synth_text_rows, synth_vision_rows = load_local_synthetic_conv(
@@ -2968,84 +3101,145 @@ def _(
             seed=SEED,
         )
 
-    # ---- 4. STREAMING SEA-INSTRUCT-2602 (aisingapore/SEA-Instruct-2602) ----
-    sea_rows = []
+    # ---- SEA TRAIN ----
+    sea_train_rows = []
     if ENABLE_SEA_INSTRUCT and SAMPLE_SEA_INSTRUCT > 0:
-        sea_rows = load_sea_instruct_samples(
+        sea_train_rows = load_sea_instruct_samples(
             repo_id=DATASET_SEA_INSTRUCT_REPO,
-            config_name="Indonesian",
+            config_name=TEXT_SEA_CONFIG,
             n_samples=SAMPLE_SEA_INSTRUCT,
             min_quality=SEA_INSTRUCT_MIN_QUALITY,
             enable_mto=ENABLE_MTO_PREFIX,
             processor=processor,
             seed=SEED,
+            split="train",
         )
 
-    # ---- 5. HOLD-OUT EVAL VISION: 5% PERCAKAPAN UTUH ----
-    _conv_ids_list = []
-    for r in vision_rows:
-        _d_idx = r.get("dataset_idx")
-        if isinstance(_d_idx, int) and _d_idx >= 0:
-            _conv_ids_list.append(_d_idx)
-    _conv_ids = sorted(set(_conv_ids_list))
-    random.seed(SEED)
-    random.shuffle(_conv_ids)
-    _n_eval_conv = max(5, int(len(_conv_ids) * VISION_TEST_SIZE)) if _conv_ids else 0
-    _eval_conv_set = set(_conv_ids[:_n_eval_conv])
-    _vision_eval_rows = [
-        r for r in vision_rows
-        if isinstance(r.get("dataset_idx"), int) and r.get("dataset_idx") in _eval_conv_set
-    ]
-    vision_train_rows = [
-        r for r in vision_rows
-        if not (isinstance(r.get("dataset_idx"), int) and r.get("dataset_idx") in _eval_conv_set)
-    ]
-
-    # Gabungkan vision (HF + synthetic) dan teks (HF + synthetic + SEA-Instruct)
+    # ---- JOINT TRAIN: tidak ada holdout tambahan dari split train ----
     all_vision_train_rows = vision_train_rows + synth_vision_rows
-    all_text_rows = text_rows + synth_text_rows + sea_rows
+    all_text_train_rows = text_rows + synth_text_rows + sea_train_rows
+    joint_rows = all_vision_train_rows + all_text_train_rows
+    random.Random(SEED).shuffle(joint_rows)
 
-    print(f"  ✅ Hold-out eval vision: {_n_eval_conv}/{len(_conv_ids)} percakapan "
-          f"({len(_vision_eval_rows)} turn-rows eval / {len(all_vision_train_rows)} turn-rows train)")
+    total_train_rows = len(joint_rows)
+    text_ratio = len(all_text_train_rows) / max(1, total_train_rows)
+    print(
+        f"  📊 Joint train: vision={len(all_vision_train_rows)} "
+        f"(HF={len(vision_train_rows)}, synth={len(synth_vision_rows)}) | "
+        f"teks={len(all_text_train_rows)} "
+        f"(chat+indoqa={len(text_rows)}, synth={len(synth_text_rows)}, SEA={len(sea_train_rows)}) | "
+        f"total={total_train_rows} (rasio teks={text_ratio:.2f})"
+    )
 
-    # ---- 6. JOINT MIXING ----
-    _total_samples = len(all_text_rows) + len(all_vision_train_rows)
-    _actual_ratio = len(all_text_rows) / max(1, _total_samples)
-    print(f"  📊 Joint Mixing (100% Data): vision={len(all_vision_train_rows)} (HF={len(vision_train_rows)}, Synth={len(synth_vision_rows)}) "
-          f"| teks={len(all_text_rows)} (HF={len(text_rows)}, Synth={len(synth_text_rows)}, SEA={len(sea_rows)}) "
-          f"| total={_total_samples} (rasio teks={_actual_ratio:.2f})")
+    # ---- FULL OFFICIAL VALIDATION: LOSS-ONLY ----
+    chat_validation_samples = load_hf_samples(
+        DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "validation", 0, seed=SEED
+    )
+    indoqa_validation_samples = load_hf_samples(
+        DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "validation", 0, seed=SEED
+    )
+    chat_validation_rows = [
+        {**row, "_source": "chat_sft_validation"}
+        for row in text_sft_to_joint(
+            chat_validation_samples, is_chat=True, enable_mto=ENABLE_MTO_PREFIX
+        )
+    ]
+    indoqa_validation_rows = [
+        {**row, "_source": "indoqa_sft_validation"}
+        for row in text_sft_to_joint(
+            indoqa_validation_samples, is_chat=False, enable_mto=ENABLE_MTO_PREFIX
+        )
+    ]
+    sea_validation_rows = []
+    if ENABLE_SEA_INSTRUCT:
+        sea_validation_rows = load_sea_instruct_samples(
+            repo_id=DATASET_SEA_INSTRUCT_REPO,
+            config_name=TEXT_SEA_CONFIG,
+            n_samples=None,
+            min_quality=SEA_INSTRUCT_MIN_QUALITY,
+            enable_mto=ENABLE_MTO_PREFIX,
+            processor=processor,
+            seed=SEED,
+            split="validation",
+        )
 
-    joint_rows = all_vision_train_rows + all_text_rows
-    random.seed(SEED)
-    random.shuffle(joint_rows)
+    _missing_validation_sources = [
+        source_name
+        for source_name, source_rows in (
+            ("vision_sft", vision_validation_rows),
+            ("chat_sft", chat_validation_rows),
+            ("indoqa_sft", indoqa_validation_rows),
+            ("sea_general_sft", sea_validation_rows if ENABLE_SEA_INSTRUCT else [True]),
+        )
+        if not source_rows
+    ]
+    if _missing_validation_sources:
+        raise RuntimeError(
+            "Validation resmi gagal dimuat untuk: "
+            + ", ".join(_missing_validation_sources)
+            + ". Training dihentikan agar eval 20% tidak terlewat diam-diam."
+        )
 
-    # ---- 7. EVAL SETS ----
-    joint_eval_multimodal = Dataset.from_list(_vision_eval_rows, on_mixed_types="use_json") if _vision_eval_rows else None
+    text_validation_rows = (
+        chat_validation_rows + indoqa_validation_rows + sea_validation_rows
+    )
+    joint_eval_multimodal = (
+        Dataset.from_list(vision_validation_rows, on_mixed_types="use_json")
+        if vision_validation_rows else None
+    )
+    joint_eval_text_only = (
+        Dataset.from_list(text_validation_rows, on_mixed_types="use_json")
+        if text_validation_rows else None
+    )
 
-    _eval_text_rows = []
-    try:
-        _per_cfg = max(1, MAX_EVAL_TEXT_SAMPLES // 2)
-        _val_chat = load_hf_samples(DATASET_TEXT_REPO, TEXT_CHAT_CONFIG, "validation", _per_cfg, seed=SEED)
-        _val_indoqa = load_hf_samples(DATASET_TEXT_REPO, TEXT_INDOQA_CONFIG, "validation", _per_cfg, seed=SEED)
-        _eval_text_rows = text_sft_to_joint(_val_chat, is_chat=True, enable_mto=ENABLE_MTO_PREFIX) + text_sft_to_joint(_val_indoqa, is_chat=False, enable_mto=ENABLE_MTO_PREFIX)
-        print(f"  ✅ Text-only eval (validation HF, cap {MAX_EVAL_TEXT_SAMPLES}): {len(_eval_text_rows)} rows")
-    except Exception as e:
-        print(f"  ⚠️ Gagal memuat eval text-only: {e}")
-    joint_eval_text_only = Dataset.from_list(_eval_text_rows, on_mixed_types="use_json") if _eval_text_rows else None
+    # ---- SMALL GENERATION EVAL: 100 ROWS PER SOURCE ----
+    def _sample_generation_rows(rows, seed_offset):
+        if len(rows) <= MAX_EVAL_GEN_SAMPLES:
+            return list(rows)
+        return random.Random(SEED + seed_offset).sample(rows, MAX_EVAL_GEN_SAMPLES)
+
+    generation_multimodal_rows = _sample_generation_rows(vision_validation_rows, 1)
+    generation_text_rows = (
+        _sample_generation_rows(chat_validation_rows, 2)
+        + _sample_generation_rows(indoqa_validation_rows, 3)
+        + _sample_generation_rows(sea_validation_rows, 4)
+    )
+    joint_generation_eval_multimodal = (
+        Dataset.from_list(generation_multimodal_rows, on_mixed_types="use_json")
+        if generation_multimodal_rows else None
+    )
+    joint_generation_eval_text_only = (
+        Dataset.from_list(generation_text_rows, on_mixed_types="use_json")
+        if generation_text_rows else None
+    )
 
     joint_sft_train_dataset = Dataset.from_list(joint_rows, on_mixed_types="use_json")
-
     joint_sft_eval_datasets = {}
     if joint_eval_multimodal is not None:
         joint_sft_eval_datasets["multimodal"] = joint_eval_multimodal
     if joint_eval_text_only is not None:
         joint_sft_eval_datasets["text_only"] = joint_eval_text_only
 
-    print(f"\n  ✅ JOINT SFT train V8: {len(joint_sft_train_dataset)} | "
-          f"eval sets: {list(joint_sft_eval_datasets.keys())}")
+    print(
+        "  ✅ Full validation loss rows: "
+        f"vision={len(vision_validation_rows)}, chat={len(chat_validation_rows)}, "
+        f"indoqa={len(indoqa_validation_rows)}, SEA={len(sea_validation_rows)}"
+    )
+    print(
+        "  ✅ Generation rows: "
+        f"vision={len(generation_multimodal_rows)}, "
+        f"text={len(generation_text_rows)} "
+        f"(maks. {MAX_EVAL_GEN_SAMPLES} per sumber)"
+    )
+    print(
+        f"\n  ✅ JOINT SFT train V8: {len(joint_sft_train_dataset)} | "
+        f"full eval sets: {list(joint_sft_eval_datasets.keys())}"
+    )
     return (
         joint_eval_multimodal,
         joint_eval_text_only,
+        joint_generation_eval_multimodal,
+        joint_generation_eval_text_only,
         joint_sft_eval_datasets,
         joint_sft_train_dataset,
     )
@@ -3054,7 +3248,7 @@ def _(
 @app.cell
 def _(torch):
     class Seq2SeqVisionCollator:
-        def __init__(self, processor, max_src, max_tgt, train_dataset=None):
+        def __init__(self, processor, max_src, max_tgt, train_dataset=None, validation_dataset=None):
             self.processor = processor
             self.tok = processor.tokenizer
             self.pad_id = self.tok.pad_token_id
@@ -3062,19 +3256,30 @@ def _(torch):
             self.max_src = max_src
             self.max_tgt = max_tgt
             self.train_dataset = train_dataset
+            self.validation_dataset = validation_dataset
+            if max_src < 2 or max_tgt < 2 or self.eos_id is None or self.pad_id is None:
+                raise ValueError("SFT requires valid length limits, EOS and padding token IDs.")
         def __call__(self, batch):
             iids, amasks, pvals, labs = [], [], [], []
             for item in batch:
                 images = None
-                if "images" in item and item["images"]:
+                if item.get("images"):
                     images = item["images"]
-                elif "dataset_idx" in item and item["dataset_idx"] >= 0 and self.train_dataset is not None:
-                    try:
-                        full_images = self.train_dataset[item["dataset_idx"]]["images"]
-                        indices = item.get("image_indices", [])
-                        images = [full_images[i] for i in indices if i < len(full_images)]
-                    except Exception:
-                        pass
+                elif item.get("dataset_idx", -1) >= 0:
+                    source_dataset = (
+                        self.validation_dataset
+                        if item.get("_vision_split") == "validation"
+                        else self.train_dataset
+                    )
+                    if source_dataset is None:
+                        raise RuntimeError(
+                            f"Dataset vision untuk split {item.get('_vision_split', 'train')} tidak tersedia."
+                        )
+                    full_images = source_dataset[item["dataset_idx"]]["images"]
+                    indices = item.get("image_indices", [])
+                    if any(i < 0 or i >= len(full_images) for i in indices):
+                        raise ValueError("SFT image_indices do not match the source image list.")
+                    images = [full_images[i] for i in indices]
 
                 enc = self.processor(text=item["prompt_text"],
                     images=images if images else None,
@@ -3091,14 +3296,24 @@ def _(torch):
                     input_ids = input_ids + [self.tok.eos_token_id]
                     attention_mask = attention_mask + [1]
 
+                if len(input_ids) > self.max_src:
+                    raise ValueError(
+                        f"SFT source has {len(input_ids)} tokens, exceeding max_src={self.max_src}. "
+                        "Shorten the sample or increase MAX_SOURCE_LENGTH; image tokens cannot be blindly truncated."
+                    )
                 iids.append(torch.tensor(input_ids, dtype=torch.long))
                 amasks.append(torch.tensor(attention_mask, dtype=torch.long))
 
                 if "pixel_values" in enc:
                     pvals.append(enc["pixel_values"])
-                target_formatted = item["target_text"].strip() + "<end_of_turn>"
+                target_formatted = item["target_text"].strip()
+                while target_formatted.endswith("<end_of_turn>"):
+                    target_formatted = target_formatted.removesuffix("<end_of_turn>").rstrip()
+                ending = self.tok.encode("<end_of_turn>", add_special_tokens=False) + [self.eos_id]
+                if len(ending) >= self.max_tgt or not target_formatted:
+                    raise ValueError("SFT target is empty or max_tgt cannot fit its ending.")
                 tids = self.tok.encode(target_formatted, add_special_tokens=False)
-                tids = tids[:self.max_tgt-1] + [self.eos_id]
+                tids = tids[:self.max_tgt - len(ending)] + ending
                 labs.append(torch.tensor(tids, dtype=torch.long))
             ii = torch.nn.utils.rnn.pad_sequence(iids, batch_first=True, padding_value=self.pad_id)
             am = torch.nn.utils.rnn.pad_sequence(amasks, batch_first=True, padding_value=0)
@@ -3177,16 +3392,78 @@ def _(torch):
 
 
 @app.cell
+def _(FastVisionModel, torch):
+    def preserve_training_state(method):
+        """Evaluation must restore training mode and RNG even when generation fails."""
+        from functools import wraps
+
+        @wraps(method)
+        def wrapped(self, *args, **kwargs):
+            model = kwargs.get("model", getattr(self, "model", None))
+            was_training = model.training
+            config = getattr(model, "config", None)
+            old_cache = getattr(config, "use_cache", None)
+            with torch.random.fork_rng():
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
+                    if was_training:
+                        if hasattr(FastVisionModel, "for_training"):
+                            FastVisionModel.for_training(model)
+                        else:
+                            model.train()
+                    else:
+                        if hasattr(FastVisionModel, "for_inference"):
+                            FastVisionModel.for_inference(model)
+                        else:
+                            model.eval()
+                    if old_cache is not None:
+                        config.use_cache = old_cache
+
+        return wrapped
+
+    return (preserve_training_state,)
+
+
+@app.cell
+def _():
+    def select_sft_resume_checkpoint(files, stage_prefix):
+        """Choose the newest resumable adapter checkpoint, ignoring partial uploads."""
+        import re
+
+        pattern = re.compile(re.escape(stage_prefix.rstrip("/")) + r"/checkpoint-(\d+)/(.+)")
+        checkpoints = {}
+        for path in files:
+            match = pattern.fullmatch(path)
+            if match:
+                checkpoints.setdefault(int(match[1]), set()).add(match[2])
+        required = {"adapter_config.json", "trainer_state.json", "optimizer.pt", "scheduler.pt"}
+        for step in sorted(checkpoints, reverse=True):
+            names = checkpoints[step]
+            has_adapter = bool(names & {"adapter_model.safetensors", "adapter_model.bin"})
+            has_rng = any(re.fullmatch(r"rng_state(?:_\d+)?\.pth", name) for name in names)
+            if required <= names and has_adapter and has_rng:
+                return f"{stage_prefix.rstrip('/')}/checkpoint-{step}"
+        raise RuntimeError("HF resume requested but no complete SFT checkpoint was found.")
+
+    return (select_sft_resume_checkpoint,)
+
+
+@app.cell
 def _(
     F,
     FastVisionModel,
     SelectiveLabelSmoother,
     Seq2SeqTrainer,
+    preserve_training_state,
     torch,
 ):
     class JointSFTTrainer(Seq2SeqTrainer):
         def __init__(self, suppress_ids=None, *args, **kwargs):
             super().__init__(*args, **kwargs)
+            # This custom loss is a microbatch mean; it does not consume the
+            # accumulation-window token count. Trainer must divide before backward.
+            self.model_accepts_loss_kwargs = False
             self.suppress_ids = suppress_ids or []
             eps = self.args.label_smoothing_factor
             if eps > 0:
@@ -3208,6 +3485,7 @@ def _(
                 model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch, **kwargs
             )
 
+        @preserve_training_state
         def evaluate(
             self,
             eval_dataset=None,
@@ -3228,16 +3506,13 @@ def _(
             )
             for k in list(metrics.keys()):
                 if k.endswith("_loss") and k.startswith("eval_"):
-                    ppl_key = k.replace("_loss", "_perplexity")
+                    suffix = "_exp_smoothed_loss" if self.args.label_smoothing_factor > 0 else "_perplexity"
+                    ppl_key = k.removesuffix("_loss") + suffix
                     try:
                         metrics[ppl_key] = math.exp(metrics[k])
                     except OverflowError:
                         metrics[ppl_key] = float("inf")
 
-            if hasattr(FastVisionModel, "for_training"):
-                FastVisionModel.for_training(self.model)
-            else:
-                self.model.train()
             torch._dynamo.reset()
             gc.collect()
             if torch.cuda.is_available():
@@ -3248,7 +3523,8 @@ def _(
             import math
             for k in list(logs.keys()):
                 if k.endswith("_loss") and k.startswith("eval_"):
-                    ppl_key = k.replace("_loss", "_perplexity")
+                    suffix = "_exp_smoothed_loss" if self.args.label_smoothing_factor > 0 else "_perplexity"
+                    ppl_key = k.removesuffix("_loss") + suffix
                     try:
                         logs[ppl_key] = math.exp(logs[k])
                     except OverflowError:
@@ -3404,10 +3680,12 @@ def _(
             )
             co = model(
                 encoder_outputs=encoder_outputs,
+                attention_mask=inputs["attention_mask"],
                 labels=cl,
             )
             ro = model(
                 encoder_outputs=encoder_outputs,
+                attention_mask=inputs["attention_mask"],
                 labels=rl,
             )
             # Token-level emphasis untuk rejected yang berflaw 'repetitive' (proksi span-level)
@@ -3676,6 +3954,7 @@ def _(
     datetime,
     delete_remote_prefix,
     os,
+    preserve_training_state,
     torch,
     upload_folder_atomic,
 ):
@@ -3697,9 +3976,6 @@ def _(
         ) -> None:
             if logs is None:
                 return
-
-            logs.pop("eval_loss", None)
-            logs.pop("eval_perplexity", None)
 
             if "loss" in logs:
                 self.train_steps.append(state.global_step)
@@ -3821,7 +4097,7 @@ def _(
         def on_step_end(self, args, state, control, **kwargs) -> None:
             epoch = int(state.epoch) if int(state.epoch) == state.epoch else f"{state.epoch:.2f}"
             self.training_tracker.update(
-                state.global_step + 1,
+                state.global_step,
                 comment=f"Epoch {epoch}/{state.num_train_epochs}",
                 force_update=self._force_next_update,
             )
@@ -3850,8 +4126,9 @@ def _(
         def on_log(self, args, state, control, logs=None, **kwargs) -> None:
             from transformers.trainer_utils import IntervalStrategy
 
-            if args.eval_strategy == IntervalStrategy.NO and logs is not None and "loss" in logs:
-                values = {"Training Loss": logs["loss"], "Step": state.global_step}
+            if logs is not None and "loss" in logs and self.training_tracker is not None:
+                position = round(state.epoch or 0, 4) if self.first_column == "Epoch" else state.global_step
+                values = {"Training Loss": logs["loss"], self.first_column: position}
                 self.training_tracker.write_line(values)
 
         def on_evaluate(self, args, state, control, metrics=None, **kwargs) -> None:
@@ -3968,6 +4245,10 @@ def _(
             if model is None:
                 return
 
+            self._generate_samples(state, model=model)
+
+        @preserve_training_state
+        def _generate_samples(self, state, *, model):
             from unsloth import FastVisionModel
             if hasattr(FastVisionModel, "for_inference"):
                 FastVisionModel.for_inference(model)
@@ -4030,17 +4311,12 @@ def _(
                     lines.append(f"Expected Target: {target}")
                     lines.append(f"Model Response: {response}{flag}")
 
-            from unsloth import FastVisionModel
-            if hasattr(FastVisionModel, "for_training"):
-                FastVisionModel.for_training(model)
-            else:
-                model.train()
-
             torch._dynamo.reset()
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+            os.makedirs(self.output_dir, exist_ok=True)
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
 
@@ -4069,6 +4345,8 @@ def _(
             control: TrainerControl,
             **kwargs: Any,
         ) -> TrainerControl:
+            if not state.is_world_process_zero:
+                return control
             from huggingface_hub import HfApi
             _api = HfApi(token=self.token)
             checkpoint_name = f"checkpoint-{state.global_step}"
@@ -4142,7 +4420,6 @@ def _(
     JOINT_PREFIX,
     JointHubUploadCallback,
     JointSFTTrainer,
-    MAX_EVAL_GEN_SAMPLES,
     MAX_SOURCE_LENGTH,
     MAX_TARGET_LENGTH,
     OPTIMIZER_TYPE,
@@ -4170,7 +4447,6 @@ def _(
     SFT_ORSCALE_SCALE,
     SFT_PER_DEVICE_EVAL_BATCH_SIZE,
     SFT_PER_DEVICE_TRAIN_BATCH_SIZE,
-    SFT_PREDICT_WITH_GENERATE,
     SFT_SAVE_EVAL_STEPS,
     SFT_SAVE_TOTAL_LIMIT,
     SFT_WARMUP_STEPS,
@@ -4184,22 +4460,24 @@ def _(
     create_optimizer,
     gc,
     get_scheduler,
-    joint_eval_multimodal,
-    joint_eval_text_only,
+    joint_generation_eval_multimodal,
+    joint_generation_eval_text_only,
     joint_sft_eval_datasets,
     joint_sft_train_dataset,
-    make_compute_metrics,
     model,
     os,
     patch_neftune_compatibility,
     processor,
+    select_sft_resume_checkpoint,
     sft_done,
     sft_resume,
     torch,
     upload_folder_atomic,
     vision_train_dataset,
+    vision_validation_dataset,
 ):
     _should_run = RUN_SFT and (not sft_done) and (model is not None)
+    sft_training_finished = bool(sft_done)
     if not _should_run:
         print(
             f"⏭️ [JOINT-SFT] Dilewati — RUN_SFT={RUN_SFT}, sft_done={sft_done}, model={'OK' if model is not None else 'None'}."
@@ -4214,21 +4492,37 @@ def _(
         print(f"[JOINT-SFT] Output dir V8: {joint_sft_output_dir}")
         print(f"[JOINT-SFT] Train: {len(joint_sft_train_dataset)} | Eval sets: {list(joint_sft_eval_datasets.keys())}")
 
-        _mm_rows = list(joint_eval_multimodal) if joint_eval_multimodal is not None else []
+        # Generation evaluation memakai subset kecil yang sudah disampling per sumber.
+        _mm_rows = (
+            list(joint_generation_eval_multimodal)
+            if joint_generation_eval_multimodal is not None else []
+        )
         _mm_gen_samples = []
-        for _item in _mm_rows[:MAX_EVAL_GEN_SAMPLES]:
-            _full_imgs = vision_train_dataset[_item["dataset_idx"]]["images"] if _item.get("dataset_idx", -1) >= 0 else []
+        for _item in _mm_rows:
+            _full_imgs = (
+                vision_validation_dataset[_item["dataset_idx"]]["images"]
+                if _item.get("dataset_idx", -1) >= 0 else []
+            )
             _indices = _item.get("image_indices", [])
             _subset = [_full_imgs[i] for i in _indices if i < len(_full_imgs)]
             _mm_gen_samples.append({
                 "prompt_text": _item["prompt_text"],
                 "target_text": _item["target_text"],
                 "images": _subset,
+                "source": _item.get("_source", "vision_validation"),
             })
-        _to_rows = list(joint_eval_text_only) if joint_eval_text_only is not None else []
+        _to_rows = (
+            list(joint_generation_eval_text_only)
+            if joint_generation_eval_text_only is not None else []
+        )
         _to_gen_samples = [
-            {"prompt_text": r["prompt_text"], "target_text": r["target_text"], "images": []}
-            for r in _to_rows[:MAX_EVAL_GEN_SAMPLES]
+            {
+                "prompt_text": row["prompt_text"],
+                "target_text": row["target_text"],
+                "images": [],
+                "source": row.get("_source", "text_validation"),
+            }
+            for row in _to_rows
         ]
 
         # ---- Optimizer V8: OrScale-LM + GrokFast + AdEMAMix ----
@@ -4257,23 +4551,14 @@ def _(
             projector_branch=PROJECTOR_BRANCH,
         )
 
-        _num_update_steps = max(
-            1, len(joint_sft_train_dataset) // (SFT_PER_DEVICE_TRAIN_BATCH_SIZE * SFT_GRADIENT_ACCUMULATION_STEPS)
-        )
-        _max_steps = _num_update_steps * SFT_NUM_EPOCHS
-
         if _optimizer is not None:
-            _lr_scheduler = get_scheduler(
-                name=SFT_LR_SCHEDULER_TYPE,
-                optimizer=_optimizer,
-                num_warmup_steps=SFT_WARMUP_STEPS,
-                num_training_steps=_max_steps,
-            )
-            _optimizers = (_optimizer, _lr_scheduler)
+            # Trainer knows the actual distributed dataloader length and creates
+            # the scheduler before restoring its state from a checkpoint.
+            _optimizers = (_optimizer, None)
             _optim_str = "adamw_torch"
-            print(f"[JOINT-SFT] Optimizer: {type(_optimizer).__name__} | max_steps={_max_steps}")
+            print(f"[JOINT-SFT] Optimizer: {type(_optimizer).__name__} | scheduler by Trainer")
         else:
-            _optimizers = ()
+            _optimizers = (None, None)
             _optim_str = "paged_adamw_8bit"
             print("[JOINT-SFT] Optimizer: paged_adamw_8bit (dibangun Trainer)")
 
@@ -4313,7 +4598,13 @@ def _(
 
         patch_neftune_compatibility(model)
 
-        sft_collator = Seq2SeqVisionCollator(processor, MAX_SOURCE_LENGTH, MAX_TARGET_LENGTH, vision_train_dataset)
+        sft_collator = Seq2SeqVisionCollator(
+            processor,
+            MAX_SOURCE_LENGTH,
+            MAX_TARGET_LENGTH,
+            train_dataset=vision_train_dataset,
+            validation_dataset=vision_validation_dataset,
+        )
 
         joint_sft_trainer = JointSFTTrainer(
             suppress_ids=ALL_SUPPRESS_IDS,
@@ -4341,11 +4632,11 @@ def _(
                 label_smoothing_factor=SFT_LABEL_SMOOTHING_FACTOR,
                 neftune_noise_alpha=SFT_NEFTUNE_NOISE_ALPHA,
                 gradient_checkpointing=True,
-                eval_strategy="steps",
-                eval_steps=SFT_SAVE_EVAL_STEPS,
+                # Eval 1: seluruh split validation resmi, loss-only, satu kali per epoch.
+                # Eval 2: generation subset dijalankan callback setiap save interval.
+                eval_strategy="epoch",
                 report_to="none",
-                predict_with_generate=SFT_PREDICT_WITH_GENERATE,
-                generation_max_length=MAX_TARGET_LENGTH,
+                predict_with_generate=False,
                 torch_empty_cache_steps=TORCH_EMPTY_CACHE_STEPS,
                 dataloader_num_workers=DATALOADER_NUM_WORKERS,
                 dataloader_prefetch_factor=DATALOADER_PREFETCH_FACTOR,
@@ -4353,8 +4644,9 @@ def _(
             train_dataset=joint_sft_train_dataset,
             eval_dataset=joint_sft_eval_datasets,
             data_collator=sft_collator,
+            processing_class=processor,
             optimizers=_optimizers,
-            compute_metrics=make_compute_metrics(processor),
+            compute_metrics=None,
             callbacks=[_plot_cb, _progress_cb, _smp_mm, _smp_to, _hub_cb],
         )
         from transformers.utils.notebook import NotebookProgressCallback as _HFNPC
@@ -4363,49 +4655,24 @@ def _(
         _resume_from = None
         if sft_resume:
             try:
-                from huggingface_hub import snapshot_download as _resume_snap
                 from huggingface_hub import HfApi as _ResumeApi
+                from huggingface_hub import snapshot_download as _resume_snap
 
                 _api = _ResumeApi(token=os.environ.get("HF_TOKEN"))
-                _files = _api.list_repo_files(repo_id=UNIFIED_HF_REPO)
+                _revision = _api.model_info(UNIFIED_HF_REPO).sha
+                _files = _api.list_repo_files(repo_id=UNIFIED_HF_REPO, revision=_revision)
+                _checkpoint_path = select_sft_resume_checkpoint(_files, f"{JOINT_PREFIX}/sft")
 
-                _ckpt_prefix = f"{JOINT_PREFIX}/sft/checkpoint-"
-                _ckpts = list(set([f.split('/')[2] for f in _files if f.startswith(_ckpt_prefix)]))
-                if _ckpts:
-                    _ckpts.sort(key=lambda x: int(x.split('-')[1]))
-                    _latest_ckpt = _ckpts[-1]
-                else:
-                    _latest_ckpt = "checkpoint-*"
-
-                print(f"\n📥 [JOINT-SFT] Downloading {_latest_ckpt} untuk resume...")
-                _resume_snap(
+                print(f"\n📥 [JOINT-SFT] Downloading {_checkpoint_path} untuk resume...")
+                _snapshot_root = _resume_snap(
                     repo_id=UNIFIED_HF_REPO,
-                    local_dir=joint_sft_output_dir,
-                    allow_patterns=[f"{JOINT_PREFIX}/sft/{_latest_ckpt}/**"],
+                    revision=_revision,
+                    allow_patterns=[f"{_checkpoint_path}/**"],
                     token=os.environ.get("HF_TOKEN"),
                 )
-                _sub_dir = os.path.join(joint_sft_output_dir, JOINT_PREFIX, "sft")
-                if os.path.exists(_sub_dir):
-                    import shutil as _shutil_r
-                    for _item in os.listdir(_sub_dir):
-                        _src = os.path.join(_sub_dir, _item)
-                        _dst = os.path.join(joint_sft_output_dir, _item)
-                        if os.path.isdir(_src) and _item.startswith("checkpoint-"):
-                            if os.path.exists(_dst):
-                                _shutil_r.rmtree(_dst)
-                            _shutil_r.move(_src, _dst)
-                    _shutil_r.rmtree(os.path.join(joint_sft_output_dir, JOINT_PREFIX))
-
-                _checkpoints = sorted([
-                    d for d in os.listdir(joint_sft_output_dir)
-                    if d.startswith("checkpoint-") and os.path.isdir(os.path.join(joint_sft_output_dir, d))
-                    and os.path.exists(os.path.join(joint_sft_output_dir, d, "adapter_config.json"))
-                ])
-                if _checkpoints:
-                    _resume_from = True
-                    print(f"✅ [JOINT-SFT] {len(_checkpoints)} checkpoint(s) ditemukan — resume!")
-                else:
-                    print("⚠️ [JOINT-SFT] Tidak ada checkpoint valid — mulai dari awal.")
+                _resume_from = os.path.join(_snapshot_root, *_checkpoint_path.split("/"))
+                print(f"✅ [JOINT-SFT] Resume explicit checkpoint: {_resume_from}")
+                print("ℹ️ Loss logs from older code retain their old scale; compare only within each run segment.")
             except Exception as e:
                 print(f"❌ [JOINT-SFT] Gagal download checkpoint: {e}.")
                 raise RuntimeError(
@@ -4439,7 +4706,8 @@ def _(
         except Exception as e:
             print(f"❌ [JOINT-SFT] Upload final adapter GAGAL: {e}")
             raise RuntimeError("❌ [JOINT-SFT] Upload final adapter gagal — pipeline dihentikan (fail-hard).") from e
-    return
+        sft_training_finished = True
+    return (sft_training_finished,)
 
 
 @app.cell(hide_code=True)
@@ -4457,10 +4725,11 @@ def _(mo):
 
 @app.cell
 def _(
-    DATASET_TEXT_REPO,
-    DATASET_VISION_REPO,
+    DATASET_TEXT_ORPO_REPO,
+    DATASET_VISION_ORPO_REPO,
     Dataset,
     ENABLE_MTO_PREFIX,
+    RUN_ORPO,
     SAMPLE_TRAIN_TEXT_ORPO,
     SAMPLE_TRAIN_VISION_ORPO,
     SEED,
@@ -4479,6 +4748,10 @@ def _(
     vision_train_dataset,
 ):
     mo.stop(
+        not RUN_ORPO,
+        mo.md("⏸️ **[JOINT-ORPO] Dijeda. Adapter SFT tetap tersimpan dan bisa dilanjutkan nanti.**"),
+    )
+    mo.stop(
         processor is None,
         mo.md("⏭️ **[JOINT-ORPO] Model tidak dimuat — data prep dilewati.**"),
     )
@@ -4487,8 +4760,8 @@ def _(
         mo.md("unreachable"),
     )
 
-    print(f"[JOINT-ORPO] Memuat vision ORPO dari {DATASET_VISION_REPO}...")
-    raw_orpo_dataset = load_dataset(DATASET_VISION_REPO, VISION_ORPO_CONFIG, split="train")
+    print(f"[JOINT-ORPO] Memuat vision ORPO dari {DATASET_VISION_ORPO_REPO}...")
+    raw_orpo_dataset = load_dataset(DATASET_VISION_ORPO_REPO, VISION_ORPO_CONFIG, split="train")
     if SAMPLE_TRAIN_VISION_ORPO > 0 and len(raw_orpo_dataset) > SAMPLE_TRAIN_VISION_ORPO:
         raw_orpo_dataset = raw_orpo_dataset.shuffle(seed=SEED).select(range(SAMPLE_TRAIN_VISION_ORPO))
     print(f"  ✅ Vision ORPO: {len(raw_orpo_dataset)} sampel.")
@@ -4581,7 +4854,7 @@ def _(
     print(f"  ✅ Vision ORPO rows (with MTO prefix): {len(vision_orpo_rows)}")
 
     print("[JOINT-ORPO] Memuat teks ORPO (chat_orpo)...")
-    _text_orpo_samples = load_hf_samples(DATASET_TEXT_REPO, TEXT_ORPO_CONFIG, "train", SAMPLE_TRAIN_TEXT_ORPO, seed=SEED)
+    _text_orpo_samples = load_hf_samples(DATASET_TEXT_ORPO_REPO, TEXT_ORPO_CONFIG, "train", SAMPLE_TRAIN_TEXT_ORPO, seed=SEED)
     text_orpo_rows = text_orpo_to_joint(_text_orpo_samples, enable_mto=ENABLE_MTO_PREFIX)
     print(f"  ✅ Text ORPO rows: {len(text_orpo_rows)}")
 
@@ -4986,6 +5259,7 @@ def _(
     RUN_ORPO,
     UNIFIED_HF_REPO,
     final_done,
+    mo,
     model,
     orpo_done,
     os,
@@ -4994,6 +5268,11 @@ def _(
     torch,
 ):
     from huggingface_hub import HfApi as _MergeApi
+
+    mo.stop(
+        not RUN_ORPO,
+        mo.md("⏸️ **[MERGE] Dijeda bersama ORPO agar checkpoint SFT dapat dilanjutkan nanti.**"),
+    )
 
     _token = os.environ.get("HF_TOKEN")
     if not _token:
@@ -5229,10 +5508,11 @@ def _(
     model,
     processor,
     random,
+    sft_training_finished,
     torch,
     traceback,
 ):
-    if model is not None:
+    if model is not None and sft_training_finished:
         print("\n" + "=" * 70)
         print("[EVAL V8] TEST 1: Inferensi multimodal (dummy image)")
         print("=" * 70)
