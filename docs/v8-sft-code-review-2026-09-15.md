@@ -8,7 +8,7 @@ Scope: every cell in `notebooks/working-molab-v8.py` was read, with v7 used as t
 2. **Selective smoothing had unsafe BF16 arithmetic.** Smoothing now computes `log_softmax` in FP32, avoids `-inf * 0`, handles tuple outputs correctly, validates suppressed IDs, and fails on batches with no supervised tokens. The smoothing coefficient stays at 0.1.
 3. **OrScale calibrated zero-initialized LoRA weights to zero.** Such parameters now bootstrap at trust ratio 1 and calibrate once parameter and update norms are meaningful. Zero or invalid calibration values restored from older checkpoints are repaired.
 4. **Newton–Schulz formed its Gram matrix on the large axis.** Wide LoRA matrices could allocate a width-by-width matrix. It now uses the smaller axis while preserving the numerical result.
-5. **Vision rows could pair shuffled logical rows with raw Arrow image rows.** The dataset indices are flattened before direct Arrow access. Invalid image indices now fail explicitly.
+5. **Vision rows could pair shuffled logical rows with raw Arrow image rows.** Logical select/shuffle indices are resolved against the original Arrow table without materializing image data. Invalid image indices now fail explicitly. This avoids `offset overflow while concatenating arrays` on large image columns.
 6. **Source length was configured but not enforced.** Oversized inputs now fail with a descriptive error because blindly truncating image token blocks can corrupt multimodal input. Target formatting preserves exactly one end-of-turn token plus EOS within the limit.
 7. **Resume could select a partial or stale checkpoint.** It now chooses the latest numerically complete checkpoint, requires adapter/trainer/optimizer/scheduler/RNG state, pins the HF snapshot revision, and passes the exact checkpoint path to Trainer. The scheduler is built by Trainer using the actual distributed dataloader length.
 8. **Evaluation could alter later training.** Loss evaluation and sampled generation restore model mode, cache configuration, and Torch RNG even after an exception. Post-SFT smoke evaluation now depends on SFT completion.
@@ -25,7 +25,7 @@ These are intentionally not changed in this SFT patch: the TLPO lagged-policy sn
 
 ## Validation
 
-- `python -m unittest discover -s tests -p test_v8_sft_regressions.py -v`: 5 tests passed.
+- `python -m unittest discover -s tests -p test_v8_sft_regressions.py -v`: 6 tests passed.
 - `python -m marimo check notebooks/working-molab-v8.py`: passed.
 - `git diff --check`: passed (only Git's CRLF-to-LF notice).
 

@@ -1,5 +1,6 @@
 """Focused CPU regressions for v8. The notebook itself is never executed."""
 import ast
+import copy
 import math
 from pathlib import Path
 import unittest
@@ -16,8 +17,10 @@ TREE = ast.parse(PATH.read_text(encoding="utf-8"))
 def extract(name, **scope):
     nodes = [n for n in ast.walk(TREE) if isinstance(n, (ast.ClassDef, ast.FunctionDef)) and n.name == name]
     assert len(nodes) == 1, (name, len(nodes))
+    node = copy.deepcopy(nodes[0])
+    node.decorator_list = []
     namespace = {"torch": torch, "_math": math, **scope}
-    exec(compile(ast.Module(nodes, []), str(PATH), "exec"), namespace)
+    exec(compile(ast.Module([node], []), str(PATH), "exec"), namespace)
     return namespace[name]
 
 
@@ -25,6 +28,7 @@ Smoother = extract("SelectiveLabelSmoother")
 NS = extract("zeropower_via_newtonschulz5")
 OrScale = extract("GrokOrScale", zeropower_via_newtonschulz5=NS)
 SelectCheckpoint = extract("select_sft_resume_checkpoint")
+ArrowRowIndex = extract("_arrow_row_index")
 
 
 class Switch:
@@ -121,6 +125,23 @@ class V8SFTRegressions(unittest.TestCase):
         self.assertEqual(SelectCheckpoint(files, "joint/sft"), "joint/sft/checkpoint-100")
         with self.assertRaises(RuntimeError):
             SelectCheckpoint(files[-1:], "joint/sft")
+
+    def test_arrow_index_mapping_does_not_materialize_dataset(self):
+        class Scalar:
+            def __init__(self, value):
+                self.value = value
+
+            def as_py(self):
+                return self.value
+
+        class Indices:
+            def column(self, index):
+                self.requested_column = index
+                return [Scalar(7), Scalar(2)]
+
+        dataset = type("Dataset", (), {"_indices": Indices()})()
+        self.assertEqual(ArrowRowIndex(dataset, 1), 2)
+        self.assertEqual(ArrowRowIndex(type("Dataset", (), {"_indices": None})(), 4), 4)
 
 
 if __name__ == "__main__":

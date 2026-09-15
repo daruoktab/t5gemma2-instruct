@@ -264,7 +264,6 @@ def _():
     TORCH_EMPTY_CACHE_STEPS = 10      # torch.cuda.empty_cache() tiap N step (cegah OOM training panjang/vision)
     DATALOADER_NUM_WORKERS = 0        # 0 = aman di Windows/marimo; naikkan (2-4) di Linux/Molab
     DATALOADER_PREFETCH_FACTOR = None # hanya berpengaruh bila DATALOADER_NUM_WORKERS > 0
-
     return (
         ADEMA_BETA1,
         ADEMA_BETA2,
@@ -382,7 +381,6 @@ def _():
         TEXT_INDOQA_CONFIG,
         TEXT_ORPO_CONFIG,
         TEXT_SEA_CONFIG,
-        TLPO_CLIP_EPS,
         TLPO_LAMBDA,
         TORCH_EMPTY_CACHE_STEPS,
         UNIFIED_HF_REPO,
@@ -451,7 +449,7 @@ def _(environment_ready, hf_token_widget, mo, os):
     )
 
     auth_status
-    return (auth_status,)
+    return
 
 
 @app.cell
@@ -752,7 +750,6 @@ def _(environment_ready):
 
     return (
         Any,
-        AutoProcessor,
         Dataset,
         F,
         FastVisionModel,
@@ -763,11 +760,10 @@ def _(environment_ready):
         TrainerState,
         TrainingArguments,
         apply_logit_mask,
-        cast_model_to_bfloat16,
-        patch_neftune_compatibility,
         bertscore_metric,
         bleu_metric,
         cast,
+        cast_model_to_bfloat16,
         datetime,
         exact_match_metric,
         gc,
@@ -776,6 +772,7 @@ def _(environment_ready):
         meteor_metric,
         np,
         os,
+        patch_neftune_compatibility,
         random,
         re,
         rouge_metric,
@@ -2154,7 +2151,6 @@ def _(
     STEERED_SUBFOLDER,
     STEERING_FORCE,
     UNIFIED_HF_REPO,
-    auth_status,
     complete_checkpoint_dirs,
     delete_remote_prefix,
     incomplete_checkpoint_dirs,
@@ -2789,7 +2785,6 @@ def _(
 @app.cell
 def _(
     ALL_SUPPRESS_IDS,
-    AutoProcessor,
     CANGKOK_SUBFOLDER,
     FastVisionModel,
     JOINT_PREFIX,
@@ -2995,14 +2990,20 @@ def _(
     )
     print("[JOINT-SFT] ===== Membangun dataset joint V8 (vision + teks + synthetic + SEA-Instruct) =====")
 
+    def _arrow_row_index(dataset, logical_index):
+        """Resolve select/shuffle indices without materializing image-heavy Arrow data."""
+        indices = getattr(dataset, "_indices", None)
+        if indices is None:
+            return logical_index
+        return int(indices.column(0)[logical_index].as_py())
+
     def _unroll_vision_rows(dataset, split_name):
         rows = []
-        # Arrow storage ignores select/shuffle indices; align it with logical rows.
-        dataset = dataset.flatten_indices()
         messages_list = dataset["messages"]
         arrow_images = dataset._data.column("images")
         for dataset_idx, messages in enumerate(messages_list):
-            num_actual_images = len(arrow_images[dataset_idx])
+            arrow_idx = _arrow_row_index(dataset, dataset_idx)
+            num_actual_images = len(arrow_images[arrow_idx])
             image_idx = 0
             clean_context = []
             for message in messages:
@@ -3425,34 +3426,30 @@ def _(FastVisionModel, torch):
     return (preserve_training_state,)
 
 
-@app.cell
-def _():
-    def select_sft_resume_checkpoint(files, stage_prefix):
-        """Choose the newest resumable adapter checkpoint, ignoring partial uploads."""
-        import re
+@app.function
+def select_sft_resume_checkpoint(files, stage_prefix):
+    """Choose the newest resumable adapter checkpoint, ignoring partial uploads."""
+    import re
 
-        pattern = re.compile(re.escape(stage_prefix.rstrip("/")) + r"/checkpoint-(\d+)/(.+)")
-        checkpoints = {}
-        for path in files:
-            match = pattern.fullmatch(path)
-            if match:
-                checkpoints.setdefault(int(match[1]), set()).add(match[2])
-        required = {"adapter_config.json", "trainer_state.json", "optimizer.pt", "scheduler.pt"}
-        for step in sorted(checkpoints, reverse=True):
-            names = checkpoints[step]
-            has_adapter = bool(names & {"adapter_model.safetensors", "adapter_model.bin"})
-            has_rng = any(re.fullmatch(r"rng_state(?:_\d+)?\.pth", name) for name in names)
-            if required <= names and has_adapter and has_rng:
-                return f"{stage_prefix.rstrip('/')}/checkpoint-{step}"
-        raise RuntimeError("HF resume requested but no complete SFT checkpoint was found.")
-
-    return (select_sft_resume_checkpoint,)
+    pattern = re.compile(re.escape(stage_prefix.rstrip("/")) + r"/checkpoint-(\d+)/(.+)")
+    checkpoints = {}
+    for path in files:
+        match = pattern.fullmatch(path)
+        if match:
+            checkpoints.setdefault(int(match[1]), set()).add(match[2])
+    required = {"adapter_config.json", "trainer_state.json", "optimizer.pt", "scheduler.pt"}
+    for step in sorted(checkpoints, reverse=True):
+        names = checkpoints[step]
+        has_adapter = bool(names & {"adapter_model.safetensors", "adapter_model.bin"})
+        has_rng = any(re.fullmatch(r"rng_state(?:_\d+)?\.pth", name) for name in names)
+        if required <= names and has_adapter and has_rng:
+            return f"{stage_prefix.rstrip('/')}/checkpoint-{step}"
+    raise RuntimeError("HF resume requested but no complete SFT checkpoint was found.")
 
 
 @app.cell
 def _(
     F,
-    FastVisionModel,
     SelectiveLabelSmoother,
     Seq2SeqTrainer,
     preserve_training_state,
@@ -3941,7 +3938,7 @@ def _(torch):
         metrics["culturetalk_mc_samples"] = total
         return metrics
 
-    return (evaluate_culturetalk_id,)
+    return
 
 
 @app.cell
@@ -4459,7 +4456,6 @@ def _(
     VisionTrainingPlotCallback,
     create_optimizer,
     gc,
-    get_scheduler,
     joint_generation_eval_multimodal,
     joint_generation_eval_text_only,
     joint_sft_eval_datasets,
@@ -4468,7 +4464,6 @@ def _(
     os,
     patch_neftune_compatibility,
     processor,
-    select_sft_resume_checkpoint,
     sft_done,
     sft_resume,
     torch,
@@ -5408,7 +5403,13 @@ def _(
 
 
 @app.cell
-def _(FINAL_PREFIX, UNIFIED_HF_REPO, final_upload_dir, os, upload_folder_atomic):
+def _(
+    FINAL_PREFIX,
+    UNIFIED_HF_REPO,
+    final_upload_dir,
+    os,
+    upload_folder_atomic,
+):
     from huggingface_hub import HfApi as _UpFinalApi
 
     if not os.environ.get("HF_TOKEN"):
