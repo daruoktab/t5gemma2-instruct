@@ -174,7 +174,9 @@ def _():
     SFT_WEIGHT_DECAY = 0.1
     SFT_LR_SCHEDULER_TYPE = "cosine"
     SFT_LOGGING_STEPS = 10
-    SFT_SAVE_EVAL_STEPS = 100
+    # Checkpoint, upload HF, dan behavior-generation eval berjalan bersamaan.
+    # Interval yang lebih renggang mengurangi pause I/O pada training panjang.
+    SFT_SAVE_EVAL_STEPS = 250
     SFT_SAVE_TOTAL_LIMIT = 2
     SFT_LABEL_SMOOTHING_FACTOR = 0.1
     SFT_NEFTUNE_NOISE_ALPHA = 5.0
@@ -206,7 +208,7 @@ def _():
     ORPO_WEIGHT_DECAY = 0.1
     ORPO_LR_SCHEDULER_TYPE = "cosine"
     ORPO_LOGGING_STEPS = 10
-    ORPO_SAVE_EVAL_STEPS = 6
+    ORPO_SAVE_EVAL_STEPS = 25
     ORPO_SAVE_TOTAL_LIMIT = 2
     ORPO_LABEL_SMOOTHING_FACTOR = 0.0   # WAJIB 0.0 — smoothing merusak odds-ratio ORPO
     ORPO_MAX_GRAD_NORM = 5.0
@@ -3293,6 +3295,14 @@ def _(torch):
                     input_ids = [self.tok.bos_token_id] + input_ids
                     attention_mask = [1] + attention_mask
 
+                if (
+                    self.tok.bos_token_id is not None
+                    and len(input_ids) > 1
+                    and input_ids[0] == self.tok.bos_token_id
+                    and input_ids[1] == self.tok.bos_token_id
+                ):
+                    raise ValueError("SFT source contains duplicate leading BOS tokens.")
+
                 if self.tok.eos_token_id is not None and (not input_ids or input_ids[-1] != self.tok.eos_token_id):
                     input_ids = input_ids + [self.tok.eos_token_id]
                     attention_mask = attention_mask + [1]
@@ -3345,12 +3355,11 @@ def _(torch):
                 if "images" in item and item["images"]:
                     images = item["images"]
                 elif "dataset_idx" in item and item["dataset_idx"] >= 0 and self.train_dataset is not None:
-                    try:
-                        full_images = self.train_dataset[item["dataset_idx"]]["images"]
-                        indices = item.get("image_indices", [])
-                        images = [full_images[i] for i in indices if i < len(full_images)]
-                    except Exception:
-                        pass
+                    full_images = self.train_dataset[item["dataset_idx"]]["images"]
+                    indices = item.get("image_indices", [])
+                    if any(i < 0 or i >= len(full_images) for i in indices):
+                        raise ValueError("ORPO image_indices do not match the source image list.")
+                    images = [full_images[i] for i in indices]
 
                 enc = self.processor(text=item["prompt_text"],
                     images=images if images else None,
@@ -3363,9 +3372,23 @@ def _(torch):
                     input_ids = [self.tok.bos_token_id] + input_ids
                     attention_mask = [1] + attention_mask
 
+                if (
+                    self.tok.bos_token_id is not None
+                    and len(input_ids) > 1
+                    and input_ids[0] == self.tok.bos_token_id
+                    and input_ids[1] == self.tok.bos_token_id
+                ):
+                    raise ValueError("ORPO source contains duplicate leading BOS tokens.")
+
                 if self.tok.eos_token_id is not None and (not input_ids or input_ids[-1] != self.tok.eos_token_id):
                     input_ids = input_ids + [self.tok.eos_token_id]
                     attention_mask = attention_mask + [1]
+
+                if len(input_ids) > self.max_src:
+                    raise ValueError(
+                        f"ORPO source has {len(input_ids)} tokens, exceeding max_src={self.max_src}. "
+                        "Image tokens cannot be blindly truncated."
+                    )
 
                 iids.append(torch.tensor(input_ids, dtype=torch.long))
                 amasks.append(torch.tensor(attention_mask, dtype=torch.long))
@@ -3418,7 +3441,7 @@ def _(FastVisionModel, torch):
                             FastVisionModel.for_inference(model)
                         else:
                             model.eval()
-                    if old_cache is not None:
+                    if old_cache is not None and config is not None:
                         config.use_cache = old_cache
 
         return wrapped
@@ -3950,11 +3973,14 @@ def _(
     TrainingArguments,
     datetime,
     delete_remote_prefix,
+    mo,
     os,
     preserve_training_state,
     torch,
     upload_folder_atomic,
 ):
+    from typing import ClassVar
+
     class VisionTrainingPlotCallback(TrainerCallback):
         def __init__(self, output_dir: str) -> None:
             self.output_dir = output_dir
@@ -4078,6 +4104,47 @@ def _(
             self._force_next_update = False
             self._buffered_step = None
             self._buffered_values = {}
+            self._status_display = None
+            self._last_status_step = -1
+            self._latest_loss = None
+
+        @staticmethod
+        def _format_metric(value) -> str:
+            if isinstance(value, (int, float)):
+                return f"{value:.4f}"
+            return str(value)
+
+        def _render_status(self, state, *, status: str, metrics: dict | None = None) -> None:
+            """Render a compact, readable training summary above the HF progress bar."""
+            import html
+            import IPython.display as disp
+
+            max_steps = max(int(state.max_steps or 0), 1)
+            step = int(state.global_step or 0)
+            progress = min(100, (step / max_steps) * 100)
+            epoch = float(state.epoch or 0)
+            loss_text = self._format_metric(self._latest_loss) if self._latest_loss is not None else "menunggu log"
+            metric_items = []
+            for key, value in (metrics or {}).items():
+                if key.endswith(("_loss", "_rouge1", "_bleu", "_bertscore_f1")):
+                    label = key.removeprefix("eval_").replace("_", " ").title()
+                    metric_items.append(
+                        f"<span><b>{html.escape(label)}</b> {html.escape(self._format_metric(value))}</span>"
+                    )
+                if len(metric_items) == 3:
+                    break
+            metrics_html = " · ".join(metric_items) or "Loss dan metrik evaluasi akan muncul di sini."
+            card = f'''<div style="font-family:ui-sans-serif,system-ui,-apple-system,sans-serif; margin:10px 0 8px; padding:14px 16px; border:1px solid #dbeafe; border-radius:12px; background:linear-gradient(135deg,#f8fbff,#eff6ff); color:#172554; box-shadow:0 2px 8px rgba(30,64,175,.08)">
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:center; margin-bottom:9px"><span style="font-weight:750;font-size:14px">✦ Training Monitor</span><span style="font-size:12px;background:#dbeafe;color:#1d4ed8;padding:3px 8px;border-radius:999px;font-weight:650">{html.escape(status)}</span></div>
+  <div style="height:7px;background:#dbeafe;border-radius:999px;overflow:hidden"><div style="height:100%;width:{progress:.1f}%;background:linear-gradient(90deg,#2563eb,#7c3aed);border-radius:999px"></div></div>
+  <div style="display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:12px;color:#475569"><span>Step <b>{step:,}</b> / {max_steps:,} · {progress:.1f}%</span><span>Epoch <b>{epoch:.2f}</b></span><span>Train loss <b>{html.escape(loss_text)}</b></span></div>
+  <div style="margin-top:7px;font-size:12px;color:#475569">{metrics_html}</div>
+</div>'''
+            widget = mo.Html(card)
+            if self._status_display is None:
+                self._status_display = disp.display(widget, display_id=True)
+            else:
+                self._status_display.update(widget)
 
         def on_train_begin(self, args, state, control, **kwargs) -> None:
             from transformers.trainer_utils import IntervalStrategy
@@ -4090,6 +4157,7 @@ def _(
             self._buffered_values = {}
             column_names = [self.first_column, "Training Loss"]
             self.training_tracker = NotebookTrainingTracker(state.max_steps, column_names)
+            self._render_status(state, status="Menyiapkan training")
 
         def on_step_end(self, args, state, control, **kwargs) -> None:
             epoch = int(state.epoch) if int(state.epoch) == state.epoch else f"{state.epoch:.2f}"
@@ -4099,6 +4167,11 @@ def _(
                 force_update=self._force_next_update,
             )
             self._force_next_update = False
+            # Refresh card mengikuti logging cadence supaya UI tetap responsif
+            # tanpa membebani output notebook pada setiap micro-step.
+            if state.global_step - self._last_status_step >= max(args.logging_steps, 1):
+                self._render_status(state, status="Training berjalan")
+                self._last_status_step = state.global_step
 
         def on_prediction_step(self, args, state, control, eval_dataloader=None, **kwargs) -> None:
             from transformers.trainer_utils import has_length
@@ -4124,9 +4197,11 @@ def _(
             from transformers.trainer_utils import IntervalStrategy
 
             if logs is not None and "loss" in logs and self.training_tracker is not None:
+                self._latest_loss = logs["loss"]
                 position = round(state.epoch or 0, 4) if self.first_column == "Epoch" else state.global_step
                 values = {"Training Loss": logs["loss"], self.first_column: position}
                 self.training_tracker.write_line(values)
+                self._render_status(state, status="Training berjalan")
 
         def on_evaluate(self, args, state, control, metrics=None, **kwargs) -> None:
             import re as _re
@@ -4188,6 +4263,8 @@ def _(
                     disp.display(disp.HTML(text_to_html_table([list(self._buffered_values.keys()), list(self._buffered_values.values())])))
                 self._buffered_values = {}
 
+            self._render_status(state, status="Evaluasi selesai", metrics=metrics_copy)
+
             self.prediction_bar = None
 
         def on_train_end(self, args, state, control, **kwargs) -> None:
@@ -4198,8 +4275,18 @@ def _(
                     force_update=True,
                 )
                 self.training_tracker = None
+            self._render_status(state, status="Training selesai")
 
     class VisionSampleGenerationCallback(TrainerCallback):
+        _TASK_LABELS: ClassVar[dict[str, str]] = {
+            "<unused1>": "Summarization",
+            "<unused2>": "Translation",
+            "<unused3>": "NER",
+            "<unused4>": "Question Answering",
+            "<unused5>": "Paraphrase",
+            "<unused6>": "General / Vision Chat",
+        }
+
         def __init__(
             self,
             processor: Any,
@@ -4225,6 +4312,85 @@ def _(
             self.top_p = top_p
             self.repetition_penalty = repetition_penalty
             self.bad_words_ids = bad_words_ids
+            self._generation_display = None
+
+        @classmethod
+        def _parse_task_prefixes(cls, text: str) -> tuple[set[str], str]:
+            """Split unordered leading task tags from user-facing answer text."""
+            import re
+
+            clean = text.strip()
+            match = re.match(r"^\s*((?:<unused[1-6]>\s*)+)", clean)
+            if match is None:
+                return set(), clean
+            tasks = set(re.findall(r"<unused[1-6]>", match.group(1)))
+            return tasks, clean[match.end():].lstrip()
+
+        @classmethod
+        def _task_chips(cls, tasks: set[str], *, muted: bool = False) -> str:
+            import html
+
+            background = "#e2e8f0" if muted else "#ede9fe"
+            foreground = "#475569" if muted else "#6d28d9"
+            if not tasks:
+                return (
+                    '<span style="font-size:11px;color:#b45309;background:#fef3c7;'
+                    'padding:3px 7px;border-radius:999px">No task prefix</span>'
+                )
+            return " ".join(
+                f'<span style="font-size:11px;color:{foreground};background:{background};'
+                f'padding:3px 7px;border-radius:999px;font-weight:650">'
+                f'{html.escape(cls._TASK_LABELS[tag])}</span>'
+                for tag in sorted(tasks)
+            )
+
+        @staticmethod
+        def _routing_scores(expected: set[str], predicted: set[str]) -> dict[str, float | bool]:
+            true_positive = len(expected & predicted)
+            precision = true_positive / len(predicted) if predicted else float(not expected)
+            recall = true_positive / len(expected) if expected else float(not predicted)
+            f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+            return {
+                "exact": expected == predicted,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+            }
+
+        def _render_generation_panel(self, state, results: list[dict]) -> None:
+            """Show the latest behavior eval as readable, collapsible Marimo cards."""
+            import html
+
+            import IPython.display as disp
+
+            cards = []
+            for index, result in enumerate(results):
+                is_open = " open" if index < 2 else ""
+                routing = result["routing"]
+                route_status = "Route set cocok" if routing["exact"] else "Route set berbeda"
+                route_color = "#047857" if routing["exact"] else "#b45309"
+                cards.append(f'''<details{is_open} style="margin:9px 0;border:1px solid #dbeafe;border-radius:10px;background:#fff;overflow:hidden">
+  <summary style="cursor:pointer;padding:10px 12px;font-weight:700;color:#1e3a8a;background:#f8fbff">Sample {index + 1} · {html.escape(result["source"])} · <span style="color:{route_color}">{route_status}</span> · {html.escape(result["repetition_status"])}</summary>
+  <div style="padding:12px;display:grid;gap:10px;font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px;line-height:1.5">
+    <section style="padding:10px 12px;border-left:4px solid #3b82f6;background:#eff6ff;border-radius:6px"><strong style="color:#1d4ed8">Prompt</strong><div style="white-space:pre-wrap;margin-top:4px">{html.escape(result["prompt"])}</div></section>
+    <section style="padding:10px 12px;border-left:4px solid #10b981;background:#ecfdf5;border-radius:6px"><strong style="color:#047857">Expected answer</strong><div style="margin-top:5px">{self._task_chips(result["expected_tasks"], muted=True)}</div><div style="white-space:pre-wrap;margin-top:7px">{html.escape(result["target_clean"])}</div></section>
+    <section style="padding:10px 12px;border-left:4px solid #8b5cf6;background:#f5f3ff;border-radius:6px"><strong style="color:#6d28d9">Model answer</strong><div style="margin-top:5px">{self._task_chips(result["predicted_tasks"])}</div><div style="white-space:pre-wrap;margin-top:7px">{html.escape(result["response_clean"])}</div></section>
+    <div style="font-size:11px;color:#64748b">Routing (order-independent): precision {routing["precision"]:.2f} · recall {routing["recall"]:.2f} · F1 {routing["f1"]:.2f}</div>
+  </div>
+</details>''')
+            exact_count = sum(bool(result["routing"]["exact"]) for result in results)
+            macro_f1 = sum(float(result["routing"]["f1"]) for result in results) / max(len(results), 1)
+            repetition_count = sum(bool(result["is_repetitive"]) for result in results)
+            panel = f'''<div style="margin:14px 0;padding:14px 16px;border:1px solid #c7d2fe;border-radius:14px;background:linear-gradient(135deg,#f8faff,#f5f3ff);box-shadow:0 2px 10px rgba(79,70,229,.08)">
+  <div style="font-family:ui-sans-serif,system-ui,sans-serif;color:#312e81;font-size:15px;font-weight:800">✦ Behavior generation eval · step {state.global_step:,}</div>
+  <div style="margin:4px 0 10px;font-family:ui-sans-serif,system-ui,sans-serif;color:#64748b;font-size:12px">Routing exact-set {exact_count}/{len(results)} · macro F1 {macro_f1:.3f} · repetitive {repetition_count}/{len(results)}. Status ini tidak menyatakan kebenaran faktual jawaban.</div>
+  {''.join(cards)}
+</div>'''
+            widget = mo.Html(panel)
+            if self._generation_display is None:
+                self._generation_display = disp.display(widget, display_id=True)
+            else:
+                self._generation_display.update(widget)
 
         def on_step_end(
             self,
@@ -4257,6 +4423,7 @@ def _(
                 f"Step {state.global_step} | {timestamp}",
                 f"{'=' * 60}",
             ]
+            generation_results = []
 
             import gc
             gc.collect()
@@ -4298,15 +4465,39 @@ def _(
                     target = sample["target_text"].strip()
                     response = raw_response.strip()
 
-                    words = response.split()
+                    expected_tasks, target_clean = self._parse_task_prefixes(target)
+                    predicted_tasks, response_clean = self._parse_task_prefixes(response)
+                    routing = self._routing_scores(expected_tasks, predicted_tasks)
+
+                    words = response_clean.split()
                     is_repetitive = (
                         len(set(words)) < max(1, len(words) * 0.3) if words else True
                     )
-                    flag = " ⚠️ REPETITIVE" if is_repetitive else " ✅"
+                    repetition_status = "⚠️ Repetitive" if is_repetitive else "Repetition: aman"
 
                     lines.append(f"\nQ: {query}")
                     lines.append(f"Expected Target: {target}")
-                    lines.append(f"Model Response: {response}{flag}")
+                    lines.append(f"Model Response: {response}")
+                    lines.append(
+                        "Routing: "
+                        f"expected={sorted(expected_tasks)} predicted={sorted(predicted_tasks)} "
+                        f"exact={routing['exact']} precision={routing['precision']:.3f} "
+                        f"recall={routing['recall']:.3f} f1={routing['f1']:.3f}"
+                    )
+                    lines.append(f"Repetition heuristic: {repetition_status}")
+                    generation_results.append({
+                        "source": sample.get("source", f"sample-{idx + 1}"),
+                        "prompt": query,
+                        "target_raw": target,
+                        "response_raw": response,
+                        "target_clean": target_clean,
+                        "response_clean": response_clean,
+                        "expected_tasks": expected_tasks,
+                        "predicted_tasks": predicted_tasks,
+                        "routing": routing,
+                        "is_repetitive": is_repetitive,
+                        "repetition_status": repetition_status,
+                    })
 
             torch._dynamo.reset()
             gc.collect()
@@ -4317,14 +4508,14 @@ def _(
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
 
-            print(f"\n[BEHAVIOR EVAL @ step {state.global_step}]")
-            for line in lines[3:]:
-                if (
-                    line.startswith("Q:")
-                    or line.startswith("Model Response:")
-                    or line.startswith("Expected Target:")
-                ):
-                    print(f"  {line}")
+            # Full output tetap tersimpan di log; panel notebook dibatasi agar
+            # evaluasi besar tidak membuat browser berat.
+            self._render_generation_panel(state, generation_results[:8])
+
+            print(
+                f"[BEHAVIOR EVAL @ step {state.global_step}] "
+                f"{len(generation_results)} sampel tersimpan di {self.log_path} dan dirender di panel."
+            )
 
     class JointHubUploadCallback(TrainerCallback):
         def __init__(self, repo_id: str, stage: str, hf_prefix: str, token: str | None = None, output_dir: str | None = None, base_model: str = "google/t5gemma-2-4b-4b") -> None:
