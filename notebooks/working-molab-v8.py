@@ -270,11 +270,14 @@ def _():
     # =====================================================================
     # 1I. TRAINER / DATALOADER TUNING (transformers >= 5.14 / accelerate >= 1.13)
     # =====================================================================
-    # Tiap 10 step pada 96GB memaksa sinkronisasi CUDA tiap step → memperlambat.
-    # Fragmentasi CUDA jarang tumbuh signifikan dalam <100 step; 100 cukup aman.
+    # Worker DataLoader TIDAK dipakai: class collator didefinisikan di dalam cell
+    # marimo, sehingga child process gagal import module-nya → worker mati senyap
+    # ("DataLoader worker exited unexpectedly"). 4 worker juga menggandakan RAM
+    # karena masing-masing rebuild processor. Kecepatan diambil dari empty_cache
+    # yang jarang + eval subsample, bukan dari proses paralel.
     TORCH_EMPTY_CACHE_STEPS = 100     # torch.cuda.empty_cache() tiap N step
-    DATALOADER_NUM_WORKERS = 4        # Molab=Linux: 4 worker parallel-ize collator CPU (tokenisasi vision + teks)
-    DATALOADER_PREFETCH_FACTOR = None # hanya berpengaruh bila DATALOADER_NUM_WORKERS > 0
+    DATALOADER_NUM_WORKERS = 0        # 0 = wajib di marimo/Molab (lihat catatan di atas)
+    DATALOADER_PREFETCH_FACTOR = None # hanya berlaku bila DATALOADER_NUM_WORKERS > 0
     return (
         ADEMA_BETA1,
         ADEMA_BETA2,
