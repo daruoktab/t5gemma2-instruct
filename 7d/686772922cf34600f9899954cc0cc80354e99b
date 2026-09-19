@@ -1,0 +1,32 @@
+.gitignore
+  h_4e362b87d6c27d 58-72
+notebooks/working-molab-v8.py
+  h_4e362b87d6c27d 39,155-156,167,171,176,183-186,193-195,273-276,293,396,402,623-627,629-630,641-643,646-651,654,812-815,825,882-884,920,922-925,1553,1627,2077,2393,2433,2630,2677,2789,2848-2850,2868,2943-2946,2992-2993,3004,3026,3161,3259-3271,3273-3281,3311,3313,3323-3347,3421,3423,3430-3453,3463,3590,3596,3600,3608-3610,3615-3624,3634-3635,3739-3740,3751,3757,3762-3764,3880-3881,4132,4245,4333,4354-4355,4573,4739,4777,4786,4870-4883,4885,4933,4938,4963-4966,5302,5324,5439-5442,5447,5498,5504,5887
+pyproject.toml
+  h_4e362b87d6c27d 6-52
+reports/probe-v8-runtime.log
+  h_4e362b87d6c27d 1-100
+reports/probe-v8-unsloth.log
+  h_4e362b87d6c27d 1-62
+reports/probe_v8_runtime.py
+  h_4e362b87d6c27d 1-140
+reports/unsloth-env-packages.json
+  h_4e362b87d6c27d 1-3
+reports/v8-environment-audit-2026-09-11.md
+  h_4e362b87d6c27d 1-59
+reports/v8-runtime-audit-2026-09-11.md
+  h_4e362b87d6c27d 1-88
+reports/working-molab-v8-deep-audit.md
+  h_4e362b87d6c27d 1-314
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7d686772922cf34600f9899954cc0cc80354e99b",
+  "prompts": {},
+  "humans": {
+    "h_4e362b87d6c27d": {
+      "author": "daruoktab <daruokta@gmail.com>"
+    }
+  }
+}
