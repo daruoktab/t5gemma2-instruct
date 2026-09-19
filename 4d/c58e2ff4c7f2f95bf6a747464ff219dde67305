@@ -1,0 +1,14 @@
+notebooks/working-molab-v8.py
+  h_4e362b87d6c27d 273-277,279-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4dc58e2ff4c7f2f95bf6a747464ff219dde67305",
+  "prompts": {},
+  "humans": {
+    "h_4e362b87d6c27d": {
+      "author": "daruoktab <daruokta@gmail.com>"
+    }
+  }
+}
