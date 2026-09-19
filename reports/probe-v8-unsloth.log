@@ -1,0 +1,62 @@
+PYTHON C:\Users\daru\anaconda3\envs\unsloth-env\python.exe
+DIAGNOSTIC metadata mapping bypass enabled
+TORCH 2.14.0+cu130 CUDA True
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+W0911 01:30:45.457000 23740 site-packages\torch\utils\_pytree.py:630] <enum 'KernelPreference'> is an Enum subclass and is now natively supported by torch.compile as an opaque value type. Calling register_constant() on Enum subclasses is deprecated and will be an error in a future release.
+W0911 01:30:45.524000 23740 site-packages\torch\utils\_pytree.py:630] <enum 'ScaleCalculationMode'> is an Enum subclass and is now natively supported by torch.compile as an opaque value type. Calling register_constant() on Enum subclasses is deprecated and will be an error in a future release.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\unsloth\import_fixes.py:2124: FutureWarning: torch._dynamo.config.inline_inbuilt_nn_modules is deprecated and does not do anything, inline_inbuilt_nn_modules is always True. It will be removed in a future version of PyTorch.
+  original_setattr(self, name, value)
+UNSLOTH C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\unsloth\__init__.py
+MODEL T5Gemma2ForConditionalGeneration
+D:\Codings\unsloth-porto\t5-gemma-2\instruct\reports\probe_v8_runtime.py:72: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\torch\csrc\autograd\generated\python_variable_methods.cpp:821.)
+  return float(out.loss)
+PASS t5gemma2 forward/backward 4.181507110595703
+PASS v8 SFT loss/backward 4.179732322692871
+PASS v8 ORPO loss/backward 4.252692222595215
+FAIL PEFT seq2seq forward/backward Traceback (most recent call last):
+  File "D:\Codings\unsloth-porto\t5-gemma-2\instruct\reports\probe_v8_runtime.py", line 58, in check
+    result = fn()
+             ^^^^
+  File "D:\Codings\unsloth-porto\t5-gemma-2\instruct\reports\probe_v8_runtime.py", line 91, in lora
+    wrapped = get_peft_model(model, LoraConfig(task_type=TaskType.SEQ_2_SEQ_LM, r=2, target_modules=['q_proj','v_proj']))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Codings\unsloth-porto\t5-gemma-2\instruct\unsloth_compiled_cache\moe_utils.py", line 1380, in patched_get_peft_model
+    peft_model = original_get_peft_model(model, *args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\mapping_func.py", line 122, in get_peft_model
+    return MODEL_TYPE_TO_PEFT_MODEL_MAPPING[peft_config.task_type](
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\peft_model.py", line 2404, in __init__
+    super().__init__(model, peft_config, adapter_name, **kwargs)
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\peft_model.py", line 164, in __init__
+    self.base_model = cls(model, {adapter_name: peft_config}, adapter_name)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\tuners\tuners_utils.py", line 318, in __init__
+    self.inject_adapter(self.model, adapter_name, low_cpu_mem_usage=low_cpu_mem_usage, state_dict=state_dict)
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\tuners\tuners_utils.py", line 917, in inject_adapter
+    self._create_and_replace(
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\unsloth_zoo\temporary_patches\gemma4.py", line 941, in create_and_replace
+    return original_create_and_replace(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\tuners\lora\model.py", line 281, in _create_and_replace
+    new_module = self._create_new_module(lora_config, adapter_name, target, device_map=device_map, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\tuners\lora\model.py", line 430, in _create_new_module
+    new_module = dispatcher(target, adapter_name, config=lora_config, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\tuners\lora\awq.py", line 100, in dispatch_awq
+    if is_gptqmodel_available() and is_gptqmodel_awq_layer(target_base_layer):
+       ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\daru\anaconda3\envs\unsloth-env\Lib\site-packages\peft\import_utils.py", line 78, in is_gptqmodel_available
+    raise ImportError(
+ImportError: gptqmodel requires optimum version `1.24.0` or higher to be installed.
+
+PASS TLPO gradient diagnostic {'first_loss': -0.0, 'requires_grad': False}
+PASS v8 GrokOrScale CUDA step True
+PASS tiny vision forward/backward 4.229145526885986
+PASS ORPO missing mask numerical diagnostic {'max_logit_difference': 0.06039736419916153}
+PASS DIAGNOSTIC LoRA with optional GPTQ bypassed ('PeftModelForSeq2SeqLM', 4.174532890319824)
+DONE

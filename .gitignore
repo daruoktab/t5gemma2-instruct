@@ -56,3 +56,17 @@ test_*.jsonl
 /mcpb/generate-conv-indonesia/generated_conv_agent.jsonl
 dataset_conversations_*.jsonl
 dataset_output.jsonl
+
+# IDE (PyCharm/IntelliJ) — konfigurasi lokal, tidak untuk di-commit
+/.idea/
+.idea/
+*.iml
+
+# marimo session/auto-download artifacts
+notebooks/__marimo__/
+
+# Lint/type-checker caches
+.ruff_cache/
+
+# Scratch script sementara (mis. probe/analisis lokal)
+tmp_*

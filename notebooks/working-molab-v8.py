@@ -36,7 +36,7 @@
 #               (decoder T5Gemma <- SVD_Purify(Gemma3-IT - Gemma3-Base, tau=0.85))
 #   Phase 1.5 : Vision Grafting (SigLIP 400M + multi_modal_projector <- Gemma 3 4B IT)
 #   Phase 1   : JOINT SFT + MTO Task Prefix Mapping (<unused1>..<unused6>)
-#               (OrScale-LM Optimizer + Selective Label Smoothing + Logit Masking)
+#               (OrScale-LM Optimizer + Selective Label Smoothing (eps=0.05, MTO-prefix-aware) + Logit Masking)
 #   Phase 2   : JOINT ORPO + TLPO Regularization (Token-Level Policy Penalty)
 #               (Split Forward Encoder->Decoder, ε=0.0, TLPO lambda=0.05)
 #   Final     : 1x Unified Merge (BF16 + 4bit) -> repo subfolder final/
@@ -152,6 +152,8 @@ def _():
     # Seluruh split validation resmi dipakai untuk loss evaluation. Generation
     # evaluation memakai subset kecil agar tidak menggandakan biaya eval penuh.
     MAX_EVAL_GEN_SAMPLES = 100    # per sumber: vision, chat, IndoQA, dan SEA
+    VISION_TRAIN_REPEAT = 2       # baris vision digandakan di campuran train (~20% share); validation TIDAK diulang
+    EVAL_LOSS_MAX_PER_SOURCE = 2000  # subsample seeded per sumber utk eval loss periodik (split penuh = eval final)
 
     # =====================================================================
     # 1E. SFT HYPERPARAMS (Phase 1 - Joint)
@@ -162,30 +164,35 @@ def _():
 
     LORA_RANK = 64                 # rank 256 overkill (banyak paper: 64 cukup); rsLoRA scale = alpha/sqrt(r)
     LORA_ALPHA = 16                # scale = 16/sqrt(64) = 2 (zona optimal, bukan 32)
-    LORA_DROPOUT = 0.2
+    LORA_DROPOUT = 0.05
     LORA_USE_RSLORA = True
 
     SFT_LEARNING_RATE = 5e-6
-    SFT_NUM_EPOCHS = 2
+    SFT_NUM_EPOCHS = 1
     SFT_PER_DEVICE_TRAIN_BATCH_SIZE = 4
     SFT_PER_DEVICE_EVAL_BATCH_SIZE = 16
     SFT_GRADIENT_ACCUMULATION_STEPS = 16
     SFT_WARMUP_STEPS = 100
-    SFT_WEIGHT_DECAY = 0.1
+    SFT_WEIGHT_DECAY = 0.01
     SFT_LR_SCHEDULER_TYPE = "cosine"
     SFT_LOGGING_STEPS = 10
     # Checkpoint, upload HF, dan behavior-generation eval berjalan bersamaan.
     # Interval yang lebih renggang mengurangi pause I/O pada training panjang.
     SFT_SAVE_EVAL_STEPS = 250
     SFT_SAVE_TOTAL_LIMIT = 2
-    SFT_LABEL_SMOOTHING_FACTOR = 0.1
+    # Selective Label Smoothing AKTIF (dirutekan hanya ke token valid — suppress IDs
+    # dan 6 MTO prefix dikeluarkan dari massa smoothing). eps 0.05 = floor ~0.75 nats
+    # (vs ~1.24 pada eps 0.1) — regularisasi terasa tanpa mendominasi kurva loss.
+    SFT_LABEL_SMOOTHING_FACTOR = 0.05
     SFT_NEFTUNE_NOISE_ALPHA = 5.0
     SFT_MAX_GRAD_NORM = 5.0
 
     # Split-LR multiplier per param group (relatif terhadap SFT_LEARNING_RATE)
     SFT_LR_MULT_ENCODER = 0.2
     SFT_LR_MULT_DECODER = 0.2
-    SFT_LR_MULT_PROJECTOR = 0.05
+    # Projector hasil grafting belum pernah co-train dengan decoder T5Gemma;
+    # mult 0.05 (eff 5e-6) terbukti membuat loss baris vision stagnan di run lama.
+    SFT_LR_MULT_PROJECTOR = 0.2    # eff 2D = 5e-6*0.2*20 = 2e-5 (setara decoder)
     SFT_LR_MULT_VISION_TOWER = 0.0   # vision tower frozen (finetune_vision_layers=False)
 
     # =====================================================================
@@ -263,8 +270,10 @@ def _():
     # =====================================================================
     # 1I. TRAINER / DATALOADER TUNING (transformers >= 5.14 / accelerate >= 1.13)
     # =====================================================================
-    TORCH_EMPTY_CACHE_STEPS = 10      # torch.cuda.empty_cache() tiap N step (cegah OOM training panjang/vision)
-    DATALOADER_NUM_WORKERS = 0        # 0 = aman di Windows/marimo; naikkan (2-4) di Linux/Molab
+    # Tiap 10 step pada 96GB memaksa sinkronisasi CUDA tiap step → memperlambat.
+    # Fragmentasi CUDA jarang tumbuh signifikan dalam <100 step; 100 cukup aman.
+    TORCH_EMPTY_CACHE_STEPS = 100     # torch.cuda.empty_cache() tiap N step
+    DATALOADER_NUM_WORKERS = 4        # Molab=Linux: 4 worker parallel-ize collator CPU (tokenisasi vision + teks)
     DATALOADER_PREFETCH_FACTOR = None # hanya berpengaruh bila DATALOADER_NUM_WORKERS > 0
     return (
         ADEMA_BETA1,
@@ -281,6 +290,7 @@ def _():
         DATASET_VISION_ORPO_REPO,
         DATASET_VISION_REPO,
         DEVEC_SVD_TAU,
+        EVAL_LOSS_MAX_PER_SOURCE,
         ENABLE_DEVEC_STEERING,
         ENABLE_FLAW_AWARE_LOSS,
         ENABLE_LATA_ALIGNMENT,
@@ -383,11 +393,13 @@ def _():
         TEXT_INDOQA_CONFIG,
         TEXT_ORPO_CONFIG,
         TEXT_SEA_CONFIG,
+        TLPO_CLIP_EPS,
         TLPO_LAMBDA,
         TORCH_EMPTY_CACHE_STEPS,
         UNIFIED_HF_REPO,
         VISION_ORPO_CONFIG,
         VISION_SFT_CONFIG,
+        VISION_TRAIN_REPEAT,
     )
 
 
@@ -608,8 +620,14 @@ def _(environment_ready):
     import os
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["TORCH_COMPILE_DISABLE"] = "1"
-    import re, json, torch, random, datetime, gc, traceback
+    import datetime
+    import gc
+    import random
+    import re
+    import traceback
     import warnings
+
+    import torch
     warnings.filterwarnings("ignore")
 
     def _torch_compile_noop(model=None, *args, **kwargs):
@@ -620,19 +638,20 @@ def _(environment_ready):
     import torch.nn.functional as F
     setattr(torch._dynamo.config, "recompile_limit", 1024)
     setattr(torch._dynamo.config, "cache_size_limit", 1024)
-    from PIL import Image
-    from unsloth import FastVisionModel
-    from datasets import Dataset, load_dataset
-    from transformers import (
-        AutoProcessor, AutoTokenizer,
-        Seq2SeqTrainer, Seq2SeqTrainingArguments,
-        get_scheduler,
-        TrainerCallback, TrainerControl, TrainerState, TrainingArguments,
-    )
     from typing import Any, cast
 
     import numpy as np
-    import matplotlib.pyplot as plt
+    from datasets import Dataset, load_dataset
+    from transformers import (
+        Seq2SeqTrainer,
+        Seq2SeqTrainingArguments,
+        TrainerCallback,
+        TrainerControl,
+        TrainerState,
+        TrainingArguments,
+        get_scheduler,
+    )
+    from unsloth import FastVisionModel
 
     # Optional imports for evaluation metrics
     try:
@@ -790,6 +809,10 @@ def _(torch):
     SUPPRESS_BLOCK1 = [6] + list(range(13, 105))
     SUPPRESS_BLOCK2 = list(range(256002, 262144))
     SUPPRESS_VISION = [255999, 256000, 256001]   # boi, eoi, image_soft_token
+    # 6 MTO task prefix (<unused1>..<unused6>) dilepas dari ALL_SUPPRESS_IDS agar
+    # tetap bisa di-generate, tetapi dikeluarkan dari massa label smoothing —
+    # prefix hanya sah di posisi pertama target.
+    MTO_PREFIX_IDS = set(range(7, 13))
     ALL_SUPPRESS_IDS = set(SUPPRESS_BLOCK1 + SUPPRESS_BLOCK2 + SUPPRESS_VISION)
 
     # SYSTEM PROMPT FALLBACK
@@ -799,7 +822,7 @@ def _(torch):
     )
 
     BF16 = torch.cuda.is_available()
-    return ALL_SUPPRESS_IDS, BF16, SYSTEM_PROMPT
+    return ALL_SUPPRESS_IDS, BF16, MTO_PREFIX_IDS, SYSTEM_PROMPT
 
 
 @app.cell
@@ -856,7 +879,9 @@ def _(SYSTEM_PROMPT, re):
         }
         tag = prefix_mapping.get(task_category.lower(), "<unused6>")
         target_clean = target_text.strip()
-        # Jika sudah memiliki tag prefix, jangan duplikat
+        # Jika sudah memiliki tag prefix (single maupun multi), JANGAN diubah —
+        # multi-prefix seperti "<unused4><unused3><unused6>" adalah routing yang
+        # disengaja dari generator dataset. Hanya tambahkan jika belum ada prefix.
         if target_clean.startswith("<unused"):
             return target_clean
         return f"{tag} {target_clean}"
@@ -892,9 +917,12 @@ def _(SYSTEM_PROMPT, re):
 @app.cell
 def _(torch):
     class SelectiveLabelSmoother:
-        def __init__(self, epsilon, suppress_ids):
+        def __init__(self, epsilon, suppress_ids, mto_prefix_ids=None):
             self.epsilon = epsilon
-            self.suppress_ids = suppress_ids
+            # MTO prefix boleh di-generate (tidak di-mask dari logits) tetapi tidak
+            # boleh menerima massa smoothing — prefix hanya sah di posisi pertama
+            # target; memberinya massa di semua posisi menambah noise ke routing.
+            self.suppress_ids = set(suppress_ids) | set(mto_prefix_ids or ())
 
         def __call__(self, model_output, labels, shift_labels=False):
             if isinstance(model_output, dict) and "logits" in model_output:
@@ -1522,7 +1550,7 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
                 chat_idx = obj.get("chat_idx", -1)
                 chat_groups.setdefault(chat_idx, []).append(obj)
 
-            for chat_idx, turns in chat_groups.items():
+            for turns in chat_groups.values():
                 turns = sorted(turns, key=lambda x: x.get("turn_idx", 0))
                 for turn in turns:
                     tgt = turn["target"].strip()
@@ -1596,6 +1624,7 @@ def _(format_mto_encoder_input, format_mto_target, load_dataset, random):
         """
         import json as _local_json
         import os as _os
+
         from PIL import Image as _PILImage
 
         if not _os.path.exists(jsonl_path):
@@ -2045,7 +2074,7 @@ def _(BASE_T5_MODEL, os):
                 _rel = os.path.relpath(_full, folder_path).replace("\\", "/")
                 _parts = _rel.split("/")
                 _is_ignored = any(
-                    p.startswith(".") or p.endswith(".lock") or p.endswith(".metadata") or p == "CACHEDIR.TAG" or p == "_hf_provenance.json"
+                    p.startswith(".") or p.endswith((".lock", ".metadata")) or p == "CACHEDIR.TAG" or p == "_hf_provenance.json"
                     for p in _parts
                 )
                 if _is_ignored:
@@ -2360,8 +2389,8 @@ def _(
         print(f"  α_NORM (Early/Mid/Late) = {STEERING_ALPHA_NORM_EARLY} / {STEERING_ALPHA_NORM_MID} / {STEERING_ALPHA_NORM_LATE}")
         print(f"  α_QO={STEERING_ALPHA_QO} | α_KV={STEERING_ALPHA_KV} | α_QKNORM={STEERING_ALPHA_QKNORM}")
 
-        from transformers import AutoModelForSeq2SeqLM as _SteerSeq2Seq
         from transformers import AutoModelForCausalLM as _SteerCausal
+        from transformers import AutoModelForSeq2SeqLM as _SteerSeq2Seq
 
         _load_ok = False
         if not _token:
@@ -2401,7 +2430,7 @@ def _(
                 _mismatch = []
 
                 def _find_key(sd, suffix):
-                    for k in sd.keys():
+                    for k in sd:
                         if k.endswith(suffix):
                             return k
                     return None
@@ -2597,8 +2626,8 @@ def _(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        from transformers import AutoModelForSeq2SeqLM as _GraftSeq2Seq
         from transformers import AutoModelForCausalLM as _GraftCausal
+        from transformers import AutoModelForSeq2SeqLM as _GraftSeq2Seq
         from transformers import AutoProcessor as _GraftProc
 
         _steered_local = "/tmp/t5gemma2_steered_v8"
@@ -2645,7 +2674,7 @@ def _(
             _src_params = {}
             for _name, _param in _model_src.named_parameters():
                 if "vision_tower" in _name or "multi_modal_projector" in _name:
-                    _clean = _name[len("model."):] if _name.startswith("model.") else _name
+                    _clean = _name.removeprefix("model.")
                     _src_params[_clean] = _param.detach().cpu()
             print(f"\n  Donor: {len(_src_params)} vision params (SigLIP + projector)")
 
@@ -2757,7 +2786,7 @@ def _(mo):
     - **Single-Stage Multi-Task Co-Training**: 100% Vision SFT + 100% Text SFT (`chat_sft` + `indoqa_sft`).
     - **MTO Task Prefix Routing**: Suntikkan token `<unused1>` s.d. `<unused6>` pada target decoder.
     - **OrScale-LM Optimizer**: Frobenius trust ratio scaling per layer matriks LoRA.
-    - **Selective Label Smoothing ($\epsilon=0.1$)**: Uniform smoothing pada token valid.
+    - **Selective Label Smoothing ($\epsilon=0.05$)**: Uniform smoothing pada token valid (suppress IDs & 6 MTO prefix dikeluarkan dari massa smoothing; aktif hanya saat training — eval memakai CE murni).
     """)
     return
 
@@ -2816,6 +2845,9 @@ def _(
     model = None
     processor = None
     tokenizer = None
+    # Path sumber processor: dipakai collator untuk rebuild di DataLoader worker
+    # (Gemma3Processor tidak pickle-safe setelah patch unsloth).
+    processor_src_path = None
 
     if sft_done and not orpo_done and not RUN_ORPO and pipeline_stage == "orpo":
         print("⏸️ [MODEL] SFT selesai dan RUN_ORPO=False; adapter SFT disimpan tanpa memuat model lagi.")
@@ -2833,7 +2865,7 @@ def _(
                 print(f"  🧹 Cache lokal final_adapter usang — dihapus: {_model_path}")
             if not os.path.exists(os.path.join(_model_path, "adapter_config.json")):
                 from huggingface_hub import snapshot_download as _model_snap
-                print(f"📥 [MODEL] Downloading joint/sft/final_adapter dari HF untuk ORPO...")
+                print("📥 [MODEL] Downloading joint/sft/final_adapter dari HF untuk ORPO...")
                 _model_snap(
                     repo_id=UNIFIED_HF_REPO,
                     local_dir=_model_path,
@@ -2908,6 +2940,10 @@ def _(
                 token=_token,
             )
 
+        # Gemma3Processor tidak bisa di-pickle lintas worker (class module-nya
+        # di-reload patch unsloth setelah import → identitas class beda). Simpan
+        # path sumbernya saja; worker membangun ulang processor saat fork.
+        _processor_source = _load_kwargs["model_name"]
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -2953,7 +2989,8 @@ def _(
 
         apply_logit_mask(model, ALL_SUPPRESS_IDS)
         FastVisionModel.for_training(model)
-    return model, processor, tokenizer
+        processor_src_path = _processor_source
+    return model, processor, tokenizer, processor_src_path
 
 
 @app.cell
@@ -2964,6 +3001,7 @@ def _(
     ENABLE_LOCAL_SYNTHETIC,
     ENABLE_MTO_PREFIX,
     ENABLE_SEA_INSTRUCT,
+    EVAL_LOSS_MAX_PER_SOURCE,
     LOCAL_SYNTHETIC_DATA_PATH,
     MAX_EVAL_GEN_SAMPLES,
     SAMPLE_LOCAL_SYNTHETIC,
@@ -2985,6 +3023,7 @@ def _(
     text_sft_to_joint,
     vision_train_dataset,
     vision_validation_dataset,
+    VISION_TRAIN_REPEAT,
 ):
     mo.stop(
         processor is None,
@@ -3119,7 +3158,7 @@ def _(
         )
 
     # ---- JOINT TRAIN: tidak ada holdout tambahan dari split train ----
-    all_vision_train_rows = vision_train_rows + synth_vision_rows
+    all_vision_train_rows = (vision_train_rows + synth_vision_rows) * VISION_TRAIN_REPEAT
     all_text_train_rows = text_rows + synth_text_rows + sea_train_rows
     joint_rows = all_vision_train_rows + all_text_train_rows
     random.Random(SEED).shuffle(joint_rows)
@@ -3217,11 +3256,29 @@ def _(
     )
 
     joint_sft_train_dataset = Dataset.from_list(joint_rows, on_mixed_types="use_json")
+
+    # ---- SUBSAMPLE eval loss periodik (seeded, per sumber) ----
+    # Eval per-step harus cepat: split penuh (~35K+ baris) tetap tersedia untuk
+    # evaluasi final pasca-training; eval periodik memakai subsample representatif.
+    def _subsample_eval_rows(rows, seed_offset):
+        if not rows or len(rows) <= EVAL_LOSS_MAX_PER_SOURCE:
+            return list(rows)
+        return random.Random(SEED + 100 + seed_offset).sample(list(rows), EVAL_LOSS_MAX_PER_SOURCE)
+
+    eval_loss_vision_rows = _subsample_eval_rows(vision_validation_rows, 1)
+    eval_loss_text_rows = _subsample_eval_rows(chat_validation_rows, 2) + _subsample_eval_rows(indoqa_validation_rows, 3) + _subsample_eval_rows(sea_validation_rows, 4)
+    eval_loss_multimodal = Dataset.from_list(eval_loss_vision_rows, on_mixed_types="use_json") if eval_loss_vision_rows else None
+    eval_loss_text_only = Dataset.from_list(eval_loss_text_rows, on_mixed_types="use_json") if eval_loss_text_rows else None
     joint_sft_eval_datasets = {}
-    if joint_eval_multimodal is not None:
-        joint_sft_eval_datasets["multimodal"] = joint_eval_multimodal
-    if joint_eval_text_only is not None:
-        joint_sft_eval_datasets["text_only"] = joint_eval_text_only
+    if eval_loss_multimodal is not None:
+        joint_sft_eval_datasets["multimodal"] = eval_loss_multimodal
+    if eval_loss_text_only is not None:
+        joint_sft_eval_datasets["text_only"] = eval_loss_text_only
+    print(
+        f"  ✅ Eval loss periodik (subsample seeded): vision={len(eval_loss_vision_rows)}, "
+        f"text={len(eval_loss_text_rows)} (split penuh: vision={len(vision_validation_rows)}, "
+        f"chat={len(chat_validation_rows)}, indoqa={len(indoqa_validation_rows)}, SEA={len(sea_validation_rows)})"
+    )
 
     print(
         "  ✅ Full validation loss rows: "
@@ -3251,8 +3308,9 @@ def _(
 @app.cell
 def _(torch):
     class Seq2SeqVisionCollator:
-        def __init__(self, processor, max_src, max_tgt, train_dataset=None, validation_dataset=None):
+        def __init__(self, processor, max_src, max_tgt, train_dataset=None, validation_dataset=None, processor_rebuild_path=None):
             self.processor = processor
+            self.processor_rebuild_path = processor_rebuild_path or getattr(processor, "_name_or_path", None)
             self.tok = processor.tokenizer
             self.pad_id = self.tok.pad_token_id
             self.eos_id = self.tok.eos_token_id
@@ -3262,6 +3320,31 @@ def _(torch):
             self.validation_dataset = validation_dataset
             if max_src < 2 or max_tgt < 2 or self.eos_id is None or self.pad_id is None:
                 raise ValueError("SFT requires valid length limits, EOS and padding token IDs.")
+
+        def __getstate__(self):
+            # Processor/tokenizer tidak aman di-pickle: class Gemma3Processor di-reload
+            # oleh patch unsloth sehingga identitas class-nya berbeda di worker.
+            state = self.__dict__.copy()
+            state["processor"] = None
+            state["tok"] = None
+            return state
+
+        def __setstate__(self, state):
+            self.__dict__.update(state)
+            self._restore_processor()
+
+        def _restore_processor(self):
+            if self.processor is not None:
+                return
+            if not self.processor_rebuild_path:
+                raise RuntimeError(
+                    "Seq2SeqVisionCollator: processor tidak pickle-safe dan processor_rebuild_path "
+                    "kosong — set DATALOADER_NUM_WORKERS=0 atau sediakan path model."
+                )
+            from transformers import AutoProcessor
+            self.processor = AutoProcessor.from_pretrained(self.processor_rebuild_path)
+            self.tok = self.processor.tokenizer
+
         def __call__(self, batch):
             iids, amasks, pvals, labs = [], [], [], []
             for item in batch:
@@ -3335,14 +3418,39 @@ def _(torch):
             return out
 
     class VisionORPOCollator:
-        def __init__(self, processor, max_src, max_tgt, train_dataset=None):
+        def __init__(self, processor, max_src, max_tgt, train_dataset=None, processor_rebuild_path=None):
             self.processor = processor
+            self.processor_rebuild_path = processor_rebuild_path or getattr(processor, "_name_or_path", None)
             self.tok = processor.tokenizer
             self.pad_id = self.tok.pad_token_id
             self.eos_id = self.tok.eos_token_id
             self.max_src = max_src
             self.max_tgt = max_tgt
             self.train_dataset = train_dataset
+
+        def __getstate__(self):
+            # Sama seperti Seq2SeqVisionCollator: processor dibangun ulang di worker.
+            state = self.__dict__.copy()
+            state["processor"] = None
+            state["tok"] = None
+            return state
+
+        def __setstate__(self, state):
+            self.__dict__.update(state)
+            self._restore_processor()
+
+        def _restore_processor(self):
+            if self.processor is not None:
+                return
+            if not self.processor_rebuild_path:
+                raise RuntimeError(
+                    "VisionORPOCollator: processor tidak pickle-safe dan processor_rebuild_path "
+                    "kosong — set DATALOADER_NUM_WORKERS=0 atau sediakan path model."
+                )
+            from transformers import AutoProcessor
+            self.processor = AutoProcessor.from_pretrained(self.processor_rebuild_path)
+            self.tok = self.processor.tokenizer
+
         def _enc_tgt(self, text):
             text_formatted = text.strip() + "<end_of_turn>"
             ids = self.tok.encode(text_formatted, add_special_tokens=False)
@@ -3352,7 +3460,7 @@ def _(torch):
             flaws, rationales = [], []
             for item in batch:
                 images = None
-                if "images" in item and item["images"]:
+                if item.get("images"):
                     images = item["images"]
                 elif "dataset_idx" in item and item["dataset_idx"] >= 0 and self.train_dataset is not None:
                     full_images = self.train_dataset[item["dataset_idx"]]["images"]
@@ -3479,16 +3587,17 @@ def _(
     torch,
 ):
     class JointSFTTrainer(Seq2SeqTrainer):
-        def __init__(self, suppress_ids=None, *args, **kwargs):
+        def __init__(self, suppress_ids=None, mto_prefix_ids=None, *args, **kwargs):
             super().__init__(*args, **kwargs)
             # This custom loss is a microbatch mean; it does not consume the
             # accumulation-window token count. Trainer must divide before backward.
             self.model_accepts_loss_kwargs = False
             self.suppress_ids = suppress_ids or []
+            self.mto_prefix_ids = mto_prefix_ids or set()
             eps = self.args.label_smoothing_factor
             if eps > 0:
                 self.label_smoother = SelectiveLabelSmoother(
-                    epsilon=eps, suppress_ids=self.suppress_ids
+                    epsilon=eps, suppress_ids=self.suppress_ids, mto_prefix_ids=self.mto_prefix_ids
                 )
             else:
                 self.label_smoother = None
@@ -3496,14 +3605,23 @@ def _(
         def compute_loss(
             self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs
         ):
-            if self.label_smoother is not None and "labels" in inputs:
+            # Smoothing hanya untuk training. Saat eval, loss harus CE murni
+            # agar eval_loss jujur dan comparable antar-run/epoch.
+            if self.label_smoother is not None and "labels" in inputs and model.training:
                 labels = inputs["labels"]
                 outputs = model(**inputs)
                 loss = self.label_smoother(outputs, labels, shift_labels=False)
                 return (loss, outputs) if return_outputs else loss
-            return super().compute_loss(
-                model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch, **kwargs
-            )
+            # super().compute_loss ikut memakai self.label_smoother bila terpasang;
+            # lepas sementara supaya eval benar-benar CE polos.
+            _smoother = self.label_smoother
+            self.label_smoother = None
+            try:
+                return super().compute_loss(
+                    model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch, **kwargs
+                )
+            finally:
+                self.label_smoother = _smoother
 
         @preserve_training_state
         def evaluate(
@@ -3512,8 +3630,9 @@ def _(
             ignore_keys=None,
             metric_key_prefix="eval",
         ):
-            import math
             import gc
+            import math
+
             from unsloth import FastVisionModel
             if hasattr(FastVisionModel, "for_inference"):
                 FastVisionModel.for_inference(self.model)
@@ -3617,6 +3736,8 @@ def _(
             return self.beta * tlpo_loss
 
     class JointORPOTrainer(Seq2SeqTrainer):
+        # Konstanta kelas (tidak pernah dimutasi); anotasi ClassVar tidak dipakai
+        # karena marimo melarang nama sama di dua cell.
         FLAW_WEIGHTS = {
             "hallucination": 1.5,
             "ignore_instruction": 1.3,
@@ -3627,17 +3748,20 @@ def _(
             "bad_list_formatting": 0.8,
         }
 
-        def __init__(self, beta=0.1, tlpo_lambda=0.05, suppress_ids=None,
+        def __init__(self, beta=0.1, tlpo_lambda=0.05, tlpo_clip_eps=0.2, suppress_ids=None,
                      enable_tlpo=True, enable_flaw_loss=False, flaw_lambda=0.1,
                      *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.beta = beta
             self.tlpo_lambda = tlpo_lambda
+            self.tlpo_clip_eps = tlpo_clip_eps
             self.suppress_ids = suppress_ids or set()
             self.enable_tlpo = enable_tlpo
             self.enable_flaw_loss = enable_flaw_loss
             self.flaw_lambda = flaw_lambda
-            self.tlpo_regularizer = TLPO_Regularizer(suppress_ids=self.suppress_ids, beta=self.tlpo_lambda)
+            self.tlpo_regularizer = TLPO_Regularizer(
+                suppress_ids=self.suppress_ids, beta=self.tlpo_lambda, clip_eps=self.tlpo_clip_eps
+            )
 
         def _flaw_pair_weights(self, flaws, dtype, device):
             return torch.tensor(
@@ -3752,8 +3876,9 @@ def _(
             ignore_keys=None,
             metric_key_prefix="eval",
         ):
-            import math
             import gc
+            import math
+
             from unsloth import FastVisionModel
             if hasattr(FastVisionModel, "for_inference"):
                 FastVisionModel.for_inference(self.model)
@@ -4004,7 +4129,7 @@ def _(
                 self.train_steps.append(state.global_step)
                 self.train_losses.append(float(logs["loss"]))
 
-            is_eval = any(k.startswith("eval_") for k in logs.keys())
+            is_eval = any(k.startswith("eval_") for k in logs)
             if is_eval:
                 step = state.global_step
                 if step not in self.eval_data:
@@ -4117,6 +4242,7 @@ def _(
         def _render_status(self, state, *, status: str, metrics: dict | None = None) -> None:
             """Render a compact, readable training summary above the HF progress bar."""
             import html
+
             import IPython.display as disp
 
             max_steps = max(int(state.max_steps or 0), 1)
@@ -4194,7 +4320,6 @@ def _(
             self.prediction_bar = None
 
         def on_log(self, args, state, control, logs=None, **kwargs) -> None:
-            from transformers.trainer_utils import IntervalStrategy
 
             if logs is not None and "loss" in logs and self.training_tracker is not None:
                 self._latest_loss = logs["loss"]
@@ -4205,6 +4330,7 @@ def _(
 
         def on_evaluate(self, args, state, control, metrics=None, **kwargs) -> None:
             import re as _re
+
             import IPython.display as disp
             from transformers.trainer_utils import IntervalStrategy
             from transformers.utils.notebook import text_to_html_table
@@ -4225,8 +4351,8 @@ def _(
             if metrics is None:
                 metrics = {}
 
-            is_text_only = any("text_only" in k for k in metrics.keys())
-            is_multimodal = any("multimodal" in k for k in metrics.keys())
+            is_text_only = any("text_only" in k for k in metrics)
+            is_multimodal = any("multimodal" in k for k in metrics)
 
             metric_key_prefix = "eval"
             for k in metrics:
@@ -4444,7 +4570,7 @@ def _(
                         return_tensors="pt"
                     ).to(model.device)
 
-                    outputs = getattr(model, "generate")(
+                    outputs = model.generate(
                         **inputs,
                         max_new_tokens=1024,
                         do_sample=True,
@@ -4610,6 +4736,7 @@ def _(
     JointSFTTrainer,
     MAX_SOURCE_LENGTH,
     MAX_TARGET_LENGTH,
+    MTO_PREFIX_IDS,
     OPTIMIZER_TYPE,
     ORSCALE_MAX_GRAD_NORM,
     ORSCALE_MOMENTUM,
@@ -4647,6 +4774,7 @@ def _(
     VisionTrainingPlotCallback,
     create_optimizer,
     gc,
+    get_scheduler,
     joint_generation_eval_multimodal,
     joint_generation_eval_text_only,
     joint_sft_eval_datasets,
@@ -4655,6 +4783,7 @@ def _(
     os,
     patch_neftune_compatibility,
     processor,
+    processor_src_path,
     sft_done,
     sft_resume,
     torch,
@@ -4738,11 +4867,22 @@ def _(
         )
 
         if _optimizer is not None:
-            # Trainer knows the actual distributed dataloader length and creates
-            # the scheduler before restoring its state from a checkpoint.
-            _optimizers = (_optimizer, None)
+            # Scheduler manual (seperti v7): warmup SFT_WARMUP_STEPS diikuti
+            # cosine decay. Jangan serahkan ke Trainer dengan scheduler=None —
+            # Trainer memakai default linear dgn rasio warmup 0.0.
+            _num_updates = max(
+                1, len(joint_sft_train_dataset) // (SFT_PER_DEVICE_TRAIN_BATCH_SIZE * SFT_GRADIENT_ACCUMULATION_STEPS)
+            )
+            _max_steps = _num_updates * SFT_NUM_EPOCHS
+            _lr_scheduler = get_scheduler(
+                name=SFT_LR_SCHEDULER_TYPE,
+                optimizer=_optimizer,
+                num_warmup_steps=SFT_WARMUP_STEPS,
+                num_training_steps=_max_steps,
+            )
+            _optimizers = (_optimizer, _lr_scheduler)
             _optim_str = "adamw_torch"
-            print(f"[JOINT-SFT] Optimizer: {type(_optimizer).__name__} | scheduler by Trainer")
+            print(f"[JOINT-SFT] Optimizer: {type(_optimizer).__name__} | scheduler: {SFT_LR_SCHEDULER_TYPE} manual | max_steps={_max_steps}")
         else:
             _optimizers = (None, None)
             _optim_str = "paged_adamw_8bit"
@@ -4790,10 +4930,12 @@ def _(
             MAX_TARGET_LENGTH,
             train_dataset=vision_train_dataset,
             validation_dataset=vision_validation_dataset,
+            processor_rebuild_path=processor_src_path,
         )
 
         joint_sft_trainer = JointSFTTrainer(
             suppress_ids=ALL_SUPPRESS_IDS,
+            mto_prefix_ids=MTO_PREFIX_IDS,
             model=model,
             args=Seq2SeqTrainingArguments(
                 output_dir=joint_sft_output_dir,
@@ -4818,9 +4960,10 @@ def _(
                 label_smoothing_factor=SFT_LABEL_SMOOTHING_FACTOR,
                 neftune_noise_alpha=SFT_NEFTUNE_NOISE_ALPHA,
                 gradient_checkpointing=True,
-                # Eval 1: seluruh split validation resmi, loss-only, satu kali per epoch.
-                # Eval 2: generation subset dijalankan callback setiap save interval.
-                eval_strategy="epoch",
+                # Eval 1: loss CE murni pada seluruh split validation resmi, tiap SFT_SAVE_EVAL_STEPS.
+                # Eval 2: generation subset dijalankan callback pada interval yang sama.
+                eval_strategy="steps",
+                eval_steps=SFT_SAVE_EVAL_STEPS,
                 report_to="none",
                 predict_with_generate=False,
                 torch_empty_cache_steps=TORCH_EMPTY_CACHE_STEPS,
@@ -5156,6 +5299,7 @@ def _(
     PROJECTOR_BRANCH,
     RUN_ORPO,
     Seq2SeqTrainingArguments,
+    TLPO_CLIP_EPS,
     TLPO_LAMBDA,
     TORCH_EMPTY_CACHE_STEPS,
     UNIFIED_HF_REPO,
@@ -5177,6 +5321,7 @@ def _(
     os,
     patch_neftune_compatibility,
     processor,
+    processor_src_path,
     raw_orpo_dataset,
     torch,
     upload_folder_atomic,
@@ -5291,11 +5436,15 @@ def _(
             output_dir=joint_orpo_output_dir,
         )
 
-        orpo_collator = VisionORPOCollator(processor, MAX_SOURCE_LENGTH, MAX_TARGET_LENGTH, raw_orpo_dataset)
+        orpo_collator = VisionORPOCollator(
+            processor, MAX_SOURCE_LENGTH, MAX_TARGET_LENGTH, raw_orpo_dataset,
+            processor_rebuild_path=processor_src_path,
+        )
 
         joint_orpo_trainer = JointORPOTrainer(
             beta=ORPO_BETA,
             tlpo_lambda=TLPO_LAMBDA,
+            tlpo_clip_eps=TLPO_CLIP_EPS,
             suppress_ids=ALL_SUPPRESS_IDS,
             enable_tlpo=ENABLE_TLPO_LOSS,
             enable_flaw_loss=ENABLE_FLAW_AWARE_LOSS,
@@ -5345,14 +5494,14 @@ def _(
         _resume_from_o = None
         if orpo_resume:
             try:
-                from huggingface_hub import snapshot_download as _resume_snap_o
                 from huggingface_hub import HfApi as _ResumeApiO
+                from huggingface_hub import snapshot_download as _resume_snap_o
 
                 _api_o = _ResumeApiO(token=os.environ.get("HF_TOKEN"))
                 _files_o = _api_o.list_repo_files(repo_id=UNIFIED_HF_REPO)
 
                 _ckpt_prefix_o = f"{JOINT_PREFIX}/orpo/checkpoint-"
-                _ckpts_o = list(set([f.split('/')[2] for f in _files_o if f.startswith(_ckpt_prefix_o)]))
+                _ckpts_o = list({f.split('/')[2] for f in _files_o if f.startswith(_ckpt_prefix_o)})
                 if _ckpts_o:
                     _ckpts_o.sort(key=lambda x: int(x.split('-')[1]))
                     _latest_ckpt_o = _ckpts_o[-1]
@@ -5735,7 +5884,7 @@ def _(
                     temperature=GEN_TEMPERATURE, top_p=GEN_TOP_P, use_cache=True
                 )
             response = processor.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            print(f"User: [📷 Image] Halo Gemma, boleh tolong jelaskan isi gambar ini secara singkat?")
+            print("User: [📷 Image] Halo Gemma, boleh tolong jelaskan isi gambar ini secara singkat?")
             print(f"Assistant:\n{response}")
         except Exception as e:
             print(f"Gagal inferensi multimodal: {e}")
